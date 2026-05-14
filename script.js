@@ -36,6 +36,8 @@ const LEGACY_BOX_KEYS = ['folhagemAzul', 'folhagemVerde', 'folhagemPreta', 'folh
 const GOIANIA_ROUTE_IDS = ['rota_goiania_vinicius', 'rota_goiania_maycon', 'rota_goiania_alexsandro', 'rota_goiania_edmar'];
 const GOIANIA_TRUNK_ROUTE_ID = 'rota_goiania_vinicius';
 const GOIANIA_TRUNK_DRIVER_IDS = ['user_motor_vinicius', 'user_motor_sebastiao'];
+const SUPPORT_POINT_STORE_ID = 'loja_fazenda_neropolis_sr_carlinhos';
+const SUPPORT_POINT_ROUTE_ID = 'rota_ponto_apoio_neropolis';
 
 
 const SEPARATOR_STORE_LINKS = [
@@ -995,7 +997,7 @@ const ROLE_LABELS = {
 };
 
 
-const ROUTE_DATASET_VERSION = 'rotas_motoristas_2026_05_14_v13_separadores_conciliacao';
+const ROUTE_DATASET_VERSION = 'rotas_motoristas_2026_05_14_v26_goiania_fretes';
 
 const ROUTE_DATASET = {
   "users": [
@@ -4250,7 +4252,31 @@ function firebaseErrorMessage(error) {
 }
 
 function createRouteSeedData() {
-  return deepClone(ROUTE_DATASET);
+  const data = deepClone(ROUTE_DATASET);
+  if (!data.routes.some((route) => route.id === SUPPORT_POINT_ROUTE_ID)) {
+    data.routes.push({
+      id: SUPPORT_POINT_ROUTE_ID,
+      name: 'Ponto de Apoio - Fazenda Nerópolis',
+      driverId: 'user_motor_vinicius',
+    });
+  }
+  if (!data.stores.some((store) => store.id === SUPPORT_POINT_STORE_ID)) {
+    data.stores.push({
+      id: SUPPORT_POINT_STORE_ID,
+      name: 'Fazenda Nerópolis - Sr. Carlinhos',
+      network: 'PONTO DE APOIO',
+      rede: 'PONTO DE APOIO',
+      defaultRouteId: SUPPORT_POINT_ROUTE_ID,
+      sundayRouteId: SUPPORT_POINT_ROUTE_ID,
+      routeOptions: [SUPPORT_POINT_ROUTE_ID, GOIANIA_TRUNK_ROUTE_ID],
+      promoterId: null,
+      noPromoter: true,
+      supportPoint: true,
+      emptyBoxOnly: true,
+      highStockLimit: 9999,
+    });
+  }
+  return data;
 }
 
 function normalizeText(value) {
@@ -4375,6 +4401,7 @@ function inferStoreNetwork(store) {
     { tests: ['super jockey'], label: 'Super Jockey' },
     { tests: ['alvorada'], label: 'Alvorada' },
     { tests: ['manifesto'], label: 'Manifesto' },
+    { tests: ['fazenda neropolis', 'ponto de apoio'], label: 'Ponto de Apoio' },
   ];
 
   for (const rule of prefixRules) {
@@ -4820,6 +4847,43 @@ function getGoianiaTransferQty(date = todayStr(), state = appState) {
     .reduce((acc, item) => addQty(acc, item.qty), emptyQty());
 }
 
+function isSupportPointStore(storeId, state = appState) {
+  const store = getStoreById(storeId, state);
+  return !!store && (!!store.supportPoint || store.id === SUPPORT_POINT_STORE_ID);
+}
+
+function getGoianiaFreightPendingPickups(date = todayStr(), driverId, state = appState) {
+  return (state.movements.pickups || []).filter((item) =>
+    isActiveMovement(item) &&
+    item.date === date &&
+    item.driverId === driverId &&
+    isGoianiaRoute(item.routeId) &&
+    !item.goianiaFreightReturnId &&
+    !item.returnBatchId &&
+    !item.supportPointDropId
+  );
+}
+
+function getGoianiaFreightPendingPickupTotal(date = todayStr(), driverId, state = appState) {
+  return getGoianiaFreightPendingPickups(date, driverId, state)
+    .reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+}
+
+function getPendingGoianiaFreightReturnsForCd(date = todayStr(), trunkDriverId, state = appState) {
+  return (state.movements.goianiaFreightReturns || []).filter((item) =>
+    isActiveMovement(item) &&
+    item.date === date &&
+    item.receivedByDriverId === trunkDriverId &&
+    !item.cdReturnBatchId
+  );
+}
+
+function getSupportPointDropTotalForDriver(date = todayStr(), driverId, state = appState) {
+  return (state.movements.supportPointMovements || [])
+    .filter((item) => isActiveMovement(item) && item.date === date && item.driverId === driverId && item.action === 'drop' && !item.cdReturnBatchId)
+    .reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+}
+
 function getRouteDriverName(routeId, state = appState) {
   const route = getRouteById(routeId, state);
   return getUserById(route?.driverId, state)?.name || '-';
@@ -4855,6 +4919,8 @@ function ensureStateShape(state) {
   base.movements.driverDeliveries = Array.isArray(base.movements.driverDeliveries) ? base.movements.driverDeliveries : [];
   base.movements.goianiaLoads = Array.isArray(base.movements.goianiaLoads) ? base.movements.goianiaLoads : [];
   base.movements.goianiaTransfers = Array.isArray(base.movements.goianiaTransfers) ? base.movements.goianiaTransfers : [];
+  base.movements.goianiaFreightReturns = Array.isArray(base.movements.goianiaFreightReturns) ? base.movements.goianiaFreightReturns : [];
+  base.movements.supportPointMovements = Array.isArray(base.movements.supportPointMovements) ? base.movements.supportPointMovements : [];
   base.movements.routeExceptions = Array.isArray(base.movements.routeExceptions) ? base.movements.routeExceptions : [];
   base.movements.inventories = Array.isArray(base.movements.inventories) ? base.movements.inventories : [];
   base.movements.occupiedBoxes = Array.isArray(base.movements.occupiedBoxes) ? base.movements.occupiedBoxes : [];
@@ -4880,6 +4946,20 @@ function ensureStateShape(state) {
   base.movements.goianiaTransfers = base.movements.goianiaTransfers.map((item) => ({
     ...item,
     qty: sanitizeQty(item.qty),
+  }));
+  base.movements.goianiaFreightReturns = base.movements.goianiaFreightReturns.map((item) => ({
+    ...item,
+    expectedQty: sanitizeQty(item.expectedQty),
+    actualQty: sanitizeQty(item.actualQty),
+    expectedTotal: safeInt(item.expectedTotal ?? sumQty(item.expectedQty)),
+    totalReceived: safeInt(item.totalReceived ?? sumQty(item.actualQty)),
+  }));
+  base.movements.supportPointMovements = base.movements.supportPointMovements.map((item) => ({
+    ...item,
+    qty: sanitizeQty(item.qty),
+    totalQty: safeInt(item.totalQty ?? sumQty(item.qty)),
+    action: item.action || 'drop',
+    status: item.status || 'registrado',
   }));
   base.movements.pickups = base.movements.pickups.map((item) => ({ ...item, qty: sanitizeQty(item.qty) }));
   base.movements.returns = base.movements.returns.map((item) => ({
@@ -4959,7 +5039,7 @@ function ensureStateShape(state) {
     const link = getSeparatorLinkForStore(store);
     if (link && !String(store.separator || '').trim()) store.separator = link.separator;
     if (link && !String(store.sourceRede || '').trim()) store.sourceRede = link.rede;
-    store.noPromoter = isBretasStore(store);
+    store.noPromoter = !!store.noPromoter || !!store.supportPoint || isBretasStore(store);
     if (store.noPromoter) store.promoterId = null;
   });
 
@@ -5005,6 +5085,8 @@ function createSeedState() {
       driverDeliveries: [],
       goianiaLoads: [],
       goianiaTransfers: [],
+      goianiaFreightReturns: [],
+      supportPointMovements: [],
       routeExceptions: [],
       inventories: [],
       occupiedBoxes: [],
@@ -5484,6 +5566,125 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     audit('Distribuição Goiânia', 'Carga repassada', `${sumQty(qty)} caixas de ${getStoreById(outbound.storeId, state)?.name || '-'} repassadas para ${driver.name}.`);
   }
 
+
+  if (type === 'CONFIRM_GOIANIA_FREIGHT_RETURN') {
+    if (!['admin', 'driver', 'cd'].includes(actor.role)) return { ok: false, error: 'Usuário sem permissão para confirmar devolução dos fretes.' };
+    if (actor.role === 'driver' && !isGoianiaTrunkUser(actor)) return { ok: false, error: 'Somente Vinicius/Sebastião podem confirmar devolução dos fretes de Goiânia.' };
+    const date = payload.date || todayStr();
+    const fromDriver = getUserById(payload.fromDriverId, state);
+    if (!fromDriver || fromDriver.role !== 'driver') return { ok: false, error: 'Selecione o freteiro/motorista que devolveu as caixas.' };
+    const receivedByDriverId = actor.role === 'driver' ? actor.id : (payload.receivedByDriverId || 'user_motor_vinicius');
+    const pendingPickups = getGoianiaFreightPendingPickups(date, fromDriver.id, state);
+    const expectedTotal = pendingPickups.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+    if (expectedTotal <= 0) return { ok: false, error: 'Não há recolhimentos pendentes desse freteiro para devolver ao Vinicius/Sebastião nesta data.' };
+    const totalReceived = safeInt(payload.totalReceived);
+    if (totalReceived <= 0) return { ok: false, error: 'Informe o total de caixas devolvidas pelo freteiro.' };
+    const expectedQty = pendingPickups.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
+    const actualQty = buildQtyFromTotal(totalReceived, expectedQty);
+    const returnId = randomId('gynret');
+    state.movements.goianiaFreightReturns.unshift({
+      id: returnId,
+      date,
+      fromDriverId: fromDriver.id,
+      receivedByDriverId,
+      routeId: GOIANIA_TRUNK_ROUTE_ID,
+      expectedQty,
+      actualQty,
+      expectedTotal,
+      totalReceived,
+      pickupsCount: pendingPickups.length,
+      hasDivergence: expectedTotal !== totalReceived,
+      notes: String(payload.notes || '').trim(),
+      createdBy: actor.name,
+      createdById: actor.id,
+      createdAt: nowIso(),
+    });
+    pendingPickups.forEach((item) => { item.goianiaFreightReturnId = returnId; });
+    if (expectedTotal !== totalReceived) {
+      openDivergence({
+        type: 'frete_goiania_retorno_vinicius',
+        date,
+        routeId: GOIANIA_TRUNK_ROUTE_ID,
+        driverId: fromDriver.id,
+        storeId: null,
+        expectedQty,
+        actualQty,
+        expectedTotal,
+        actualTotal: totalReceived,
+        justification: payload.notes || `Freteiro recolheu ${expectedTotal} caixas nas lojas, mas devolveu ${totalReceived} ao Vinicius/Sebastião.`,
+        originJustification: payload.notes || '',
+        responsibleUserId: fromDriver.id,
+        responsibleRole: 'driver',
+        requiresResponsibleExplanation: true,
+        responsibleExplanation: '',
+        responsibleExplanationAt: null,
+        responsibleExplanationBy: null,
+      });
+    }
+    audit('Fretes Goiânia', 'Devolução ao Vinicius/Sebastião', `${fromDriver.name} devolveu ${totalReceived}/${expectedTotal} caixas para ${getUserById(receivedByDriverId, state)?.name || 'Vinicius/Sebastião'}.`);
+  }
+
+  if (type === 'CREATE_SUPPORT_POINT_MOVEMENT') {
+    if (!['admin', 'driver'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou motorista pode movimentar ponto de apoio.' };
+    const date = payload.date || todayStr();
+    const action = payload.action === 'collect' ? 'collect' : 'drop';
+    const driverId = actor.role === 'driver' ? actor.id : (payload.driverId || 'user_motor_vinicius');
+    const driver = getUserById(driverId, state);
+    if (!driver || driver.role !== 'driver') return { ok: false, error: 'Selecione um motorista válido.' };
+    const store = getStoreById(payload.storeId || SUPPORT_POINT_STORE_ID, state);
+    if (!store || !store.supportPoint) return { ok: false, error: 'Selecione um ponto de apoio válido.' };
+    const totalQty = safeInt(payload.totalQty);
+    if (totalQty <= 0) return { ok: false, error: 'Informe a quantidade de caixas.' };
+    const currentStock = getStoreStock(store.id, state);
+    const currentTotal = sumQty(currentStock);
+    if (action === 'collect' && totalQty > currentTotal && !String(payload.notes || '').trim()) {
+      return { ok: false, error: 'Para recolher mais caixas do que o saldo do ponto de apoio, informe uma justificativa.' };
+    }
+    const qty = action === 'drop' ? buildQtyFromTotal(totalQty, emptyQty()) : buildQtyFromTotal(totalQty, currentStock);
+    const movementId = randomId('support');
+    if (action === 'drop') {
+      state.storeStocks[store.id] = addQty(currentStock, qty);
+    } else {
+      const removeQty = buildQtyFromTotal(Math.min(totalQty, currentTotal), currentStock);
+      state.storeStocks[store.id] = subQty(currentStock, removeQty);
+      state.movements.pickups.unshift({
+        id: randomId('pick'),
+        date,
+        routeId: GOIANIA_TRUNK_ROUTE_ID,
+        driverId,
+        storeId: store.id,
+        qty,
+        totalOnly: true,
+        totalQty,
+        availableAtPickup: currentTotal,
+        aboveAvailable: totalQty > currentTotal,
+        justification: String(payload.notes || '').trim(),
+        supportPointMovementId: movementId,
+        createdBy: actor.name,
+        createdById: actor.id,
+        createdAt: nowIso(),
+        returnBatchId: null,
+      });
+    }
+    state.movements.supportPointMovements.unshift({
+      id: movementId,
+      date,
+      action,
+      storeId: store.id,
+      routeId: GOIANIA_TRUNK_ROUTE_ID,
+      driverId,
+      qty,
+      totalOnly: true,
+      totalQty,
+      notes: String(payload.notes || '').trim(),
+      status: 'registrado',
+      createdBy: actor.name,
+      createdById: actor.id,
+      createdAt: nowIso(),
+    });
+    audit('Ponto de Apoio', action === 'drop' ? 'Caixas deixadas' : 'Caixas recolhidas', `${driver.name} ${action === 'drop' ? 'deixou' : 'recolheu'} ${totalQty} caixas em ${store.name}.`);
+  }
+
   if (type === 'CREATE_OUTBOUND') {
     if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode lançar saídas.' };
     const qty = sanitizeQty(payload.qty);
@@ -5686,16 +5887,25 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const totalQty = safeInt(payload.totalQty ?? sumQty(sanitizeQty(payload.qty)));
     if (totalQty <= 0) return { ok: false, error: 'Informe o total de caixas que chegou no caminhão.' };
 
+    const returnDriver = getUserById(payload.driverId, state);
+    const isGoianiaTrunkReturn = payload.routeId === GOIANIA_TRUNK_ROUTE_ID && isGoianiaTrunkUser(returnDriver);
     const pendingPickups = state.movements.pickups.filter((item) =>
       isActiveMovement(item) &&
       item.date === payload.date &&
       item.routeId === payload.routeId &&
       item.driverId === payload.driverId &&
-      !item.returnBatchId
+      !item.returnBatchId &&
+      !item.supportPointDropId
     );
+    const pendingFreightReturns = isGoianiaTrunkReturn ? getPendingGoianiaFreightReturnsForCd(payload.date, payload.driverId, state) : [];
+    const pendingSupportDrops = isGoianiaTrunkReturn ? (state.movements.supportPointMovements || []).filter((item) => isActiveMovement(item) && item.date === payload.date && item.driverId === payload.driverId && item.action === 'drop' && !item.cdReturnBatchId) : [];
+    const supportDropTotal = pendingSupportDrops.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
 
-    const expectedQty = pendingPickups.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
-    const expectedTotal = sumQty(expectedQty);
+    const pickupQty = pendingPickups.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
+    const freightReturnTotal = pendingFreightReturns.reduce((acc, item) => acc + safeInt(item.totalReceived), 0);
+    const referenceQty = addQty(pickupQty, buildQtyFromTotal(freightReturnTotal, emptyQty()));
+    const expectedTotal = Math.max(0, sumQty(pickupQty) + freightReturnTotal - supportDropTotal);
+    const expectedQty = buildQtyFromTotal(expectedTotal, referenceQty);
     if (expectedTotal <= 0) return { ok: false, error: 'Não há recolhimentos pendentes para esta rota e motorista.' };
 
     const qty = buildQtyFromTotal(totalQty, expectedQty);
@@ -5713,6 +5923,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       expectedQty,
       expectedTotal,
       pickupsCount: pendingPickups.length,
+      freightReturnsCount: pendingFreightReturns.length,
+      supportDropTotal,
       createdBy: actor.name,
       createdById: actor.id,
       createdAt: nowIso(),
@@ -5720,6 +5932,12 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     });
     pendingPickups.forEach((item) => {
       item.returnBatchId = returnBatchId;
+    });
+    pendingFreightReturns.forEach((item) => {
+      item.cdReturnBatchId = returnBatchId;
+    });
+    pendingSupportDrops.forEach((item) => {
+      item.cdReturnBatchId = returnBatchId;
     });
 
     if (expectedTotal !== totalQty) {
@@ -6416,6 +6634,7 @@ function canUserSeeStore(storeId, user = currentUser, date = todayStr(), state =
   if (canSeeGlobalData(user)) return true;
   if (user.role === 'promoter') return user.storeId === storeId;
   if (user.role === 'driver') {
+    if (storeId === SUPPORT_POINT_STORE_ID && isGoianiaTrunkUser(user)) return true;
     const routeId = getEffectiveRoute(storeId, date, state);
     if (canUserSeeRoute(routeId, user, state)) return true;
     return (state.movements.goianiaTransfers || []).some((item) =>
@@ -6615,6 +6834,9 @@ function describeDivergence(div, state = appState) {
   if (div.type === 'carga_goiania') {
     return `Carga total de Goiânia saiu diferente da soma lançada pelo CD/galpão.`;
   }
+  if (div.type === 'frete_goiania_retorno_vinicius') {
+    return `${driverName || 'Freteiro'} devolveu quantidade diferente ao Vinicius/Sebastião.`;
+  }
   if (div.type === 'recebimento_loja') {
     return `${storeName} confirmou quantidade diferente da saída do CD${routeName ? ` na ${routeName}` : ''}.`;
   }
@@ -6633,6 +6855,7 @@ function describeDivergence(div, state = appState) {
 function getDivergenceTitle(div) {
   if (div.type === 'entrega_motorista_loja') return 'Entrega do Motorista';
   if (div.type === 'carga_goiania') return 'Carga Goiânia';
+  if (div.type === 'frete_goiania_retorno_vinicius') return 'Frete Goiânia';
   if (div.type === 'retorno_cd') return 'Retorno no CD';
   if (div.type === 'recebimento_loja') return 'Recebimento na Loja';
   if (div.type === 'inventario_cd') return 'Inventário do CD';
@@ -6668,6 +6891,9 @@ function getDivergenceQtyLabels(div) {
   if (div.type === 'carga_goiania') {
     return { expected: 'Soma CD/Galpão para Goiânia', actual: 'Carregado no caminhão', diff: 'Erro real' };
   }
+  if (div.type === 'frete_goiania_retorno_vinicius') {
+    return { expected: 'Recolhido pelo freteiro nas lojas', actual: 'Devolvido ao Vinicius/Sebastião', diff: 'Erro real' };
+  }
   if (div.type === 'recebimento_loja') {
     return { expected: 'Saída lançada pelo CD', actual: 'Confirmado pela loja', diff: 'Erro real' };
   }
@@ -6696,6 +6922,9 @@ function getDivergenceRealErrorText(div) {
   }
   if (div.type === 'carga_goiania') {
     return `A carga Goiânia foi validada com ${actualTotal} caixas, mas a soma do CD/galpão era ${expectedTotal}. Diferença total: ${signal}${diffTotal} caixas.`;
+  }
+  if (div.type === 'frete_goiania_retorno_vinicius') {
+    return `O freteiro recolheu ${expectedTotal} caixas nas lojas, mas devolveu ${actualTotal} ao Vinicius/Sebastião. Diferença total: ${signal}${diffTotal} caixas.`;
   }
   if (div.type === 'recebimento_loja') {
     return `A loja confirmou ${actualTotal} caixas, mas o CD lançou ${expectedTotal}. Diferença total: ${signal}${diffTotal} caixas.`;
@@ -9416,63 +9645,153 @@ function renderDistribuicaoGoiania() {
   const drivers = appState.users.filter((user) => user.role === 'driver').filter((user) =>
     ['user_motor_vinicius', 'user_motor_maycon', 'user_motor_alexsandro', 'user_motor_edmar'].includes(user.id) || normalizeText(user.name).includes('reforco')
   );
+  const freightDrivers = drivers.filter((user) => !isGoianiaTrunkUser(user));
   const transfers = (appState.movements.goianiaTransfers || []).filter((item) => item.date === date).slice(0, 20);
+  const freightReturns = (appState.movements.goianiaFreightReturns || []).filter((item) => item.date === date).slice(0, 12);
+  const supportMovements = (appState.movements.supportPointMovements || []).filter((item) => item.date === date).slice(0, 12);
   const expected = getGoianiaExpectedQty(date);
   const distributed = getGoianiaTransferQty(date);
+  const supportStore = getStoreById(SUPPORT_POINT_STORE_ID);
+  const supportStockTotal = sumQty(getStoreStock(SUPPORT_POINT_STORE_ID));
   return `
-    <div class="grid-2">
-      <div class="card">
-        <div class="page-header">
-          <div>
-            <h3>Distribuição / transbordo Goiânia</h3>
+    <div class="stack">
+      <div class="grid-2">
+        <div class="card">
+          <div class="page-header">
+            <div>
+              <h3>Distribuição / transbordo Goiânia</h3>
+            </div>
+            <div class="helper-card small">
+              Vinicius/Sebastião validam a carga total. Freteiros entregam nas lojas e depois devolvem as caixas vazias ao Vinicius.
+            </div>
           </div>
-          <div class="helper-card small">
-            Edmar: Itumbiara e Rio Verde. Vinicius também pode receber lojas para entrega direta.
-          </div>
-        </div>
-        <form id="form-distribuicao-goiania" class="stack">
-          <div class="form-grid">
-            <label>Data
-              <input type="date" name="date" value="${date}" required />
-            </label>
-            <label>Motorista/freteiro que recebeu
-              <select name="driverId" required>
+          <form id="form-distribuicao-goiania" class="stack">
+            <div class="form-grid">
+              <label>Data
+                <input type="date" name="date" value="${date}" required />
+              </label>
+              <label>Motorista/freteiro que recebeu
+                <select name="driverId" required>
+                  <option value="">Selecione</option>
+                  ${drivers.map((driver) => `<option value="${driver.id}">${driver.name}</option>`).join('')}
+                </select>
+              </label>
+            </div>
+            <label>Loja / carga repassada
+              <select name="outboundId" id="goiania-transfer-outbound" required>
                 <option value="">Selecione</option>
-                ${drivers.map((driver) => `<option value="${driver.id}">${driver.name}</option>`).join('')}
+                ${outbounds.map((item) => `<option value="${item.id}">${getStoreById(item.storeId)?.name || '-'} • ${sumQty(item.qty)} caixas • rota ${getRouteById(item.routeId)?.name || '-'}</option>`).join('')}
               </select>
             </label>
-          </div>
-          <label>Loja / carga repassada
-            <select name="outboundId" id="goiania-transfer-outbound" required>
-              <option value="">Selecione</option>
-              ${outbounds.map((item) => `<option value="${item.id}">${getStoreById(item.storeId)?.name || '-'} • ${sumQty(item.qty)} caixas • rota ${getRouteById(item.routeId)?.name || '-'}</option>`).join('')}
-            </select>
-          </label>
-          <div id="goiania-transfer-resumo" class="helper-card small">Selecione uma carga para preencher o total por categoria.</div>
-          ${qtyInputs('goiania-transfer')}
-          <label>Observação
-            <textarea name="notes" placeholder="Ex.: repasse para Edmar / reforço por excesso de volume / entrega direta Vinicius."></textarea>
-          </label>
-          <div class="form-actions">
-            <button type="submit" class="btn btn-primary">Registrar distribuição</button>
-          </div>
-        </form>
-      </div>
-      <div class="card">
-        <h3>Resumo de hoje</h3>
-        <div class="stats-inline">
-          <div class="stat-pill"><span>Carga Goiânia</span><strong>${sumQty(expected)}</strong></div>
-          <div class="stat-pill"><span>Distribuído</span><strong>${sumQty(distributed)}</strong></div>
-          <div class="stat-pill"><span>Pendente</span><strong>${Math.max(0, sumQty(expected) - sumQty(distributed))}</strong></div>
-        </div>
-        <div class="list">
-          ${transfers.length ? transfers.map((item) => `
-            <div class="list-item">
-              <div class="list-item-head"><strong>${getStoreById(item.storeId)?.name || '-'}</strong><span class="tag info">${sumQty(item.qty)} caixas</span></div>
-              <div class="muted">Recebeu: ${getUserById(item.driverId)?.name || '-'}</div>
-              <small class="muted">${item.qty.folhagens} folhagens • ${item.qty.bandejas} bandejas</small>
+            <div id="goiania-transfer-resumo" class="helper-card small">Selecione uma carga para preencher o total por categoria.</div>
+            ${qtyInputs('goiania-transfer')}
+            <label>Observação
+              <textarea name="notes" placeholder="Ex.: repasse para Edmar / reforço por excesso de volume / entrega direta Vinicius."></textarea>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Registrar distribuição</button>
             </div>
-          `).join('') : `<div class="empty">Nenhum repasse registrado hoje.</div>`}
+          </form>
+        </div>
+        <div class="card">
+          <h3>Resumo de hoje</h3>
+          <div class="stats-inline">
+            <div class="stat-pill"><span>Carga Goiânia</span><strong>${sumQty(expected)}</strong></div>
+            <div class="stat-pill"><span>Distribuído</span><strong>${sumQty(distributed)}</strong></div>
+            <div class="stat-pill"><span>Pendente</span><strong>${Math.max(0, sumQty(expected) - sumQty(distributed))}</strong></div>
+          </div>
+          <div class="list">
+            ${transfers.length ? transfers.map((item) => `
+              <div class="list-item">
+                <div class="list-item-head"><strong>${getStoreById(item.storeId)?.name || '-'}</strong><span class="tag info">${sumQty(item.qty)} caixas</span></div>
+                <div class="muted">Recebeu: ${getUserById(item.driverId)?.name || '-'}</div>
+                <small class="muted">${item.qty.folhagens} folhagens • ${item.qty.bandejas} bandejas</small>
+              </div>
+            `).join('') : `<div class="empty">Nenhum repasse registrado hoje.</div>`}
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>Devolução dos fretes para Vinicius/Sebastião</h3>
+          <form id="form-goiania-frete-retorno" class="stack">
+            <div class="form-grid">
+              <label>Data
+                <input type="date" name="date" value="${date}" required />
+              </label>
+              <label>Freteiro/motorista
+                <select name="fromDriverId" id="goiania-frete-driver" required>
+                  <option value="">Selecione</option>
+                  ${freightDrivers.map((driver) => `<option value="${driver.id}">${driver.name}</option>`).join('')}
+                </select>
+              </label>
+            </div>
+            <div id="goiania-frete-retorno-resumo" class="helper-card small">Selecione o freteiro para conferir as caixas vazias que ele recolheu nas lojas.</div>
+            <label>Total devolvido ao Vinicius/Sebastião
+              <input type="number" min="0" step="1" name="totalReceived" value="0" required />
+            </label>
+            <label>Observação / justificativa
+              <textarea name="notes" placeholder="Obrigatório na divergência. Ex.: freteiro entregou menos caixas do que recolheu."></textarea>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Confirmar devolução do frete</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3>Ponto de apoio: Fazenda Nerópolis</h3>
+          <div class="helper-card compact small"><strong>${supportStore?.name || 'Fazenda Nerópolis - Sr. Carlinhos'}</strong> • Saldo atual: <strong>${supportStockTotal} caixas</strong></div>
+          <form id="form-ponto-apoio" class="stack">
+            <div class="form-grid">
+              <label>Data
+                <input type="date" name="date" value="${date}" required />
+              </label>
+              <label>Ação
+                <select name="action" required>
+                  <option value="drop">Deixar caixas vazias</option>
+                  <option value="collect">Recolher caixas vazias</option>
+                </select>
+              </label>
+            </div>
+            <input type="hidden" name="storeId" value="${SUPPORT_POINT_STORE_ID}" />
+            <label>Total de caixas
+              <input type="number" min="0" step="1" name="totalQty" value="0" required />
+            </label>
+            <label>Observação
+              <textarea name="notes" placeholder="Ex.: deixadas pelo Vinicius / recolhidas depois para retornar ao CD."></textarea>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Registrar ponto de apoio</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>Devoluções registradas</h3>
+          <div class="list">
+            ${freightReturns.length ? freightReturns.map((item) => `
+              <div class="list-item">
+                <div class="list-item-head"><strong>${getUserById(item.fromDriverId)?.name || '-'}</strong><span class="tag ${item.hasDivergence ? 'warn' : 'ok'}">${safeInt(item.totalReceived)} caixas</span></div>
+                <div class="muted">Recolhido nas lojas: ${safeInt(item.expectedTotal)} • Recebido por: ${getUserById(item.receivedByDriverId)?.name || '-'}</div>
+              </div>
+            `).join('') : `<div class="empty">Nenhuma devolução de frete registrada hoje.</div>`}
+          </div>
+        </div>
+        <div class="card">
+          <h3>Movimentos no ponto de apoio</h3>
+          <div class="list">
+            ${supportMovements.length ? supportMovements.map((item) => `
+              <div class="list-item">
+                <div class="list-item-head"><strong>${item.action === 'drop' ? 'Deixou' : 'Recolheu'} caixas</strong><span class="tag info">${safeInt(item.totalQty)} caixas</span></div>
+                <div class="muted">${getUserById(item.driverId)?.name || '-'} • ${getStoreById(item.storeId)?.name || '-'}</div>
+                ${item.notes ? `<small class="muted">${escapeHtml(item.notes)}</small>` : ''}
+              </div>
+            `).join('') : `<div class="empty">Nenhum movimento no ponto de apoio hoje.</div>`}
+          </div>
         </div>
       </div>
     </div>
@@ -10367,8 +10686,13 @@ function bindRetornosEvents() {
       totalQty: safeInt(form.totalQty.value),
       justification: form.justification.value.trim(),
     };
-    const pending = appState.movements.pickups.filter((item) => isActiveMovement(item) && item.date === payload.date && item.routeId === payload.routeId && item.driverId === payload.driverId && !item.returnBatchId);
-    const expectedTotal = pending.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+    const returnDriver = getUserById(payload.driverId);
+    const isGoianiaTrunkReturn = payload.routeId === GOIANIA_TRUNK_ROUTE_ID && isGoianiaTrunkUser(returnDriver);
+    const pending = appState.movements.pickups.filter((item) => isActiveMovement(item) && item.date === payload.date && item.routeId === payload.routeId && item.driverId === payload.driverId && !item.returnBatchId && !item.supportPointDropId);
+    const pickupTotal = pending.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+    const freightTotal = isGoianiaTrunkReturn ? getPendingGoianiaFreightReturnsForCd(payload.date, payload.driverId).reduce((acc, item) => acc + safeInt(item.totalReceived), 0) : 0;
+    const supportDropTotal = isGoianiaTrunkReturn ? getSupportPointDropTotalForDriver(payload.date, payload.driverId) : 0;
+    const expectedTotal = Math.max(0, pickupTotal + freightTotal - supportDropTotal);
     if (expectedTotal > 0 && expectedTotal !== payload.totalQty) {
       const confirmDivergence = window.confirm('A quantidade informada está diferente dos recolhimentos registrados pelo motorista. Deseja lançar mesmo assim e abrir uma divergência?');
       if (!confirmDivergence) return;
@@ -10761,6 +11085,61 @@ function bindDistribuicaoGoianiaEvents() {
       notes: form.notes.value.trim(),
     };
     const result = await persistMutation('CREATE_GOIANIA_TRANSFER', payload, 'Distribuição Goiânia registrada.');
+    if (result.ok) render();
+  });
+  bindGoianiaFreightReturnEvents();
+  bindSupportPointEvents();
+}
+
+
+function bindGoianiaFreightReturnEvents() {
+  const form = document.getElementById('form-goiania-frete-retorno');
+  if (!form) return;
+  const driverSelect = document.getElementById('goiania-frete-driver');
+  const summary = document.getElementById('goiania-frete-retorno-resumo');
+  const refresh = () => {
+    const date = form.date.value || todayStr();
+    const driverId = driverSelect.value;
+    if (!driverId) {
+      summary.innerHTML = 'Selecione o freteiro para conferir as caixas vazias que ele recolheu nas lojas.';
+      return;
+    }
+    summary.innerHTML = `<strong>${getUserById(driverId)?.name || '-'}</strong> possui recolhimentos pendentes para devolver ao Vinicius/Sebastião.`;
+  };
+  form.date.addEventListener('change', refresh);
+  driverSelect.addEventListener('change', refresh);
+  refresh();
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+      date: form.date.value || todayStr(),
+      fromDriverId: form.fromDriverId.value,
+      totalReceived: safeInt(form.totalReceived.value),
+      notes: form.notes.value.trim(),
+    };
+    const expected = getGoianiaFreightPendingPickupTotal(payload.date, payload.fromDriverId);
+    if (expected > 0 && expected !== payload.totalReceived) {
+      const ok = window.confirm('A quantidade devolvida está diferente do que o freteiro recolheu nas lojas. Deseja lançar mesmo assim e abrir divergência?');
+      if (!ok) return;
+    }
+    const result = await persistMutation('CONFIRM_GOIANIA_FREIGHT_RETURN', payload, 'Devolução do frete registrada.');
+    if (result.ok) render();
+  });
+}
+
+function bindSupportPointEvents() {
+  const form = document.getElementById('form-ponto-apoio');
+  if (!form) return;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+      date: form.date.value || todayStr(),
+      action: form.action.value,
+      storeId: form.storeId.value || SUPPORT_POINT_STORE_ID,
+      totalQty: safeInt(form.totalQty.value),
+      notes: form.notes.value.trim(),
+    };
+    const result = await persistMutation('CREATE_SUPPORT_POINT_MOVEMENT', payload, 'Movimento no ponto de apoio registrado.');
     if (result.ok) render();
   });
 }
