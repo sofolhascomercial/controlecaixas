@@ -4318,7 +4318,7 @@ function storeNeedsCommercialConciliation(store) {
 }
 
 function uniqueSeparators(state = appState) {
-  return [...new Set((state?.stores || [])
+  return [...new Set(getActiveStores(state)
     .map((store) => getStoreSeparator(store))
     .filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, 'pt-BR'));
@@ -4800,6 +4800,14 @@ function getStoreById(id, state = appState) {
   return state.stores.find((store) => store.id === id) || null;
 }
 
+function isActiveStore(store) {
+  return !!store && store.active !== false && store.inactive !== true && !store.deletedAt;
+}
+
+function getActiveStores(state = appState) {
+  return (state?.stores || []).filter(isActiveStore);
+}
+
 function getRouteById(id, state = appState) {
   return state.routes.find((route) => route.id === id) || null;
 }
@@ -4808,8 +4816,16 @@ function isBretasStore(store) {
   return normalizeText(store?.network || store?.rede || store?.name).includes('bretas');
 }
 
+function storeHasFixedPromoter(store) {
+  if (!store || store.supportPoint) return false;
+  if (typeof store.hasFixedPromoter === 'boolean') return store.hasFixedPromoter;
+  if (store.noPromoter === true) return false;
+  if (isBretasStore(store)) return false;
+  return true;
+}
+
 function storeRequiresPromoter(store) {
-  return !!store && !isBretasStore(store) && !store.noPromoter;
+  return storeHasFixedPromoter(store);
 }
 
 function isGoianiaRoute(routeId) {
@@ -4890,7 +4906,7 @@ function getRouteDriverName(routeId, state = appState) {
 }
 
 function uniqueNetworks(state = appState) {
-  return [...new Set(state.stores.map((store) => inferStoreNetwork(store)))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  return [...new Set(getActiveStores(state).map((store) => inferStoreNetwork(store)))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
 }
 
 function slugId(value) {
@@ -5039,7 +5055,12 @@ function ensureStateShape(state) {
     const link = getSeparatorLinkForStore(store);
     if (link && !String(store.separator || '').trim()) store.separator = link.separator;
     if (link && !String(store.sourceRede || '').trim()) store.sourceRede = link.rede;
-    store.noPromoter = !!store.noPromoter || !!store.supportPoint || isBretasStore(store);
+    if (typeof store.hasFixedPromoter === 'boolean') {
+      store.noPromoter = !store.hasFixedPromoter || !!store.supportPoint || isBretasStore(store);
+    } else {
+      store.noPromoter = !!store.noPromoter || !!store.supportPoint || isBretasStore(store);
+    }
+    store.hasFixedPromoter = !store.noPromoter;
     if (store.noPromoter) store.promoterId = null;
   });
 
@@ -5354,7 +5375,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       return { ok: false, error: 'Já existe uma loja cadastrada com este nome.' };
     }
     const id = `loja_${slugId(name)}`;
-    const noPromoter = normalizeText(network).includes('bretas') || payload.noPromoter === true;
+    const hasFixedPromoterInput = String(payload.hasFixedPromoter || '').trim();
+    const noPromoter = hasFixedPromoterInput === 'no' || normalizeText(network).includes('bretas') || payload.noPromoter === true;
     state.stores.push({
       id,
       name,
@@ -5365,6 +5387,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       routeOptions: [route.id],
       promoterId: null,
       noPromoter,
+      hasFixedPromoter: !noPromoter,
       highStockLimit: safeInt(payload.highStockLimit) || 100,
       separator: String(payload.separator || '').trim() || null,
       createdAt: nowIso(),
@@ -5380,17 +5403,50 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (!store) return { ok: false, error: 'Selecione uma loja válida.' };
     const network = String(payload.network || '').trim();
     const separator = String(payload.separator || '').trim();
+    const hasFixedPromoterInput = String(payload.hasFixedPromoter || '').trim();
     if (!network) return { ok: false, error: 'Informe a rede da loja.' };
     if (!separator) return { ok: false, error: 'Informe o separador da loja.' };
+    if (!['yes', 'no'].includes(hasFixedPromoterInput)) return { ok: false, error: 'Informe se a loja possui promotor fixo.' };
 
-    const previous = `Rede ${store.network || store.rede || '-'} / Separador ${getStoreSeparator(store) || '-'}`;
+    const previous = `Rede ${store.network || store.rede || '-'} / Separador ${getStoreSeparator(store) || '-'} / Promotor fixo ${storeRequiresPromoter(store) ? 'Sim' : 'Não'}`;
     store.network = network.toUpperCase();
     store.rede = network.toUpperCase();
     store.separator = separator;
     store.separatorRaw = separator;
+    const noPromoter = hasFixedPromoterInput === 'no' || normalizeText(network).includes('bretas') || !!store.supportPoint;
+    store.noPromoter = noPromoter;
+    store.hasFixedPromoter = !noPromoter;
+    if (store.noPromoter) store.promoterId = null;
     store.conciliatedAt = nowIso();
     store.conciliatedBy = actor.name;
-    audit('Lojas', 'Conciliação de loja', `${store.name}: ${previous} → Rede ${store.network} / Separador ${store.separator}.`);
+    audit('Lojas', 'Conciliação de loja', `${store.name}: ${previous} → Rede ${store.network} / Separador ${store.separator} / Promotor fixo ${store.hasFixedPromoter ? 'Sim' : 'Não'}.`);
+  }
+
+
+  if (type === 'DELETE_STORE') {
+    if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode excluir lojas.' };
+    const store = getStoreById(payload.storeId, state);
+    if (!store) return { ok: false, error: 'Loja não encontrada.' };
+    if (!isActiveStore(store)) return { ok: false, error: 'Esta loja já foi excluída da lista ativa.' };
+    const reason = String(payload.reason || '').trim();
+    if (reason.length < 3) return { ok: false, error: 'Informe o motivo da exclusão da loja.' };
+
+    store.inactive = true;
+    store.active = false;
+    store.deletedAt = nowIso();
+    store.deletedBy = actor.name;
+    store.deleteReason = reason;
+
+    if (store.promoterId) {
+      const promoter = getUserById(store.promoterId, state);
+      if (promoter && promoter.storeId === store.id) {
+        promoter.unassignedStoreId = store.id;
+        promoter.storeId = null;
+      }
+      store.promoterId = null;
+    }
+
+    audit('Lojas', 'Loja excluída', `${store.name} foi removida da lista ativa. Motivo: ${reason}.`);
   }
 
   if (type === 'CONFIRM_DRIVER_DELIVERY') {
@@ -6631,6 +6687,8 @@ function canUserSeeRoute(routeId, user = currentUser, state = appState) {
 
 function canUserSeeStore(storeId, user = currentUser, date = todayStr(), state = appState) {
   if (!user || !storeId) return false;
+  const store = getStoreById(storeId, state);
+  if (!store || !isActiveStore(store)) return false;
   if (canSeeGlobalData(user)) return true;
   if (user.role === 'promoter') return user.storeId === storeId;
   if (user.role === 'driver') {
@@ -6646,9 +6704,10 @@ function canUserSeeStore(storeId, user = currentUser, date = todayStr(), state =
 
 function getVisibleStores(state = appState, user = currentUser, date = todayStr()) {
   if (!user) return [];
-  if (canSeeGlobalData(user)) return state.stores;
-  if (user.role === 'promoter') return state.stores.filter((store) => store.id === user.storeId);
-  if (user.role === 'driver') return state.stores.filter((store) => canUserSeeStore(store.id, user, date, state));
+  const active = getActiveStores(state);
+  if (canSeeGlobalData(user)) return active;
+  if (user.role === 'promoter') return active.filter((store) => store.id === user.storeId);
+  if (user.role === 'driver') return active.filter((store) => canUserSeeStore(store.id, user, date, state));
   return [];
 }
 
@@ -7792,7 +7851,7 @@ function renderSaidas() {
   const date = todayStr();
   const recent = appState.movements.outbounds.filter((item) => isActiveMovement(item) && item.status !== 'historico').slice(0, 10);
   const showSeparatorFilter = canUseSeparatorFilter(currentUser);
-  const stores = [...appState.stores]
+  const stores = getActiveStores()
     .filter((store) => !hasOutboundForStoreDate(store.id, date))
     .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
   return `
@@ -8679,7 +8738,7 @@ function renderInventario() {
             <label>Loja específica
               <select name="storeId" id="mandatory-inventory-store">
                 <option value="">Selecione</option>
-                ${[...appState.stores].sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR')).map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
+                ${getActiveStores().sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR')).map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
               </select>
             </label>
             <label>Observação
@@ -8760,7 +8819,7 @@ function renderInventario() {
               <label>Loja
                 <select name="storeId" id="inventario-store" required>
                   <option value="">Selecione</option>
-                  ${[...appState.stores].sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR')).map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
+                  ${getActiveStores().sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR')).map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
                 </select>
               </label>
             </div>
@@ -9203,7 +9262,7 @@ function renderRotas() {
           <div>
             <h3>Mapa atual de rotas</h3>
           </div>
-          <div class="helper-card compact small">Motoristas: <strong>${drivers.length}</strong> • Rotas: <strong>${appState.routes.length}</strong> • Lojas: <strong>${appState.stores.length}</strong></div>
+          <div class="helper-card compact small">Motoristas: <strong>${drivers.length}</strong> • Rotas: <strong>${appState.routes.length}</strong> • Lojas: <strong>${getActiveStores().length}</strong></div>
         </div>
 
         <div class="form-grid route-map-filter">
@@ -9262,7 +9321,7 @@ function renderRotas() {
             </div>
 
             <div id="rota-padrao-store-list" class="multi-store-list" role="group" aria-label="Lojas para alterar rota">
-              ${[...appState.stores].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')).map((store) => `
+              ${getActiveStores().sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')).map((store) => `
                 <label class="multi-store-option" data-search="${normalizeText(`${getStoreOptionLabel(store)} ${inferStoreNetwork(store)}`)}">
                   <input type="checkbox" class="rota-padrao-store-checkbox" value="${store.id}" />
                   <span>
@@ -9338,7 +9397,7 @@ function renderRotas() {
               <label>Loja
                 <select name="storeId" id="excecao-rota-store" required>
                   <option value="">Selecione</option>
-                  ${[...appState.stores].sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR')).map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
+                  ${getActiveStores().sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR')).map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
                 </select>
               </label>
               <label>Nova rota
@@ -9407,7 +9466,7 @@ function renderLojas() {
   const separators = uniqueSeparators();
   const networkOptions = networks.map((network) => `<option value="${network}">${network}</option>`).join('');
   const separatorOptions = separators.map((separator) => `<option value="${escapeHtml(separator)}">${escapeHtml(separator)}</option>`).join('');
-  const rows = [...appState.stores].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const rows = getActiveStores().sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   const pendingConciliation = rows.filter(storeNeedsCommercialConciliation);
   return `
     <div class="stack">
@@ -9417,7 +9476,7 @@ function renderLojas() {
             <h3>Lojas cadastradas</h3>
           </div>
           <div class="helper-card small">
-            Total de lojas: <strong>${appState.stores.length}</strong> • Redes: <strong>${networks.length}</strong>
+            Lojas ativas: <strong>${getActiveStores().length}</strong> • Excluídas: <strong>${appState.stores.filter((store) => !isActiveStore(store)).length}</strong> • Redes: <strong>${networks.length}</strong>
           </div>
         </div>
         <div class="form-grid">
@@ -9428,7 +9487,7 @@ function renderLojas() {
             </select>
           </label>
           <div class="helper-card small">
-            <strong>Bretas:</strong> lojas desta rede não exigem promotor. A validação é feita somente pelo motorista.
+            Configure <strong>Promotor fixo</strong> para o sistema saber se precisa validação do promotor. Sem promotor, o controle fica somente CD + motorista.
           </div>
         </div>
         <div class="table-wrap lojas-table-wrap">
@@ -9440,9 +9499,11 @@ function renderLojas() {
                 <th>Separador</th>
                 <th>Rota</th>
                 <th>Motorista</th>
-                <th>Promotor</th>
+                <th>Promotor fixo</th>
+                <th>Usuário promotor</th>
                 <th>Validação</th>
                 <th>Saldo</th>
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -9458,9 +9519,11 @@ function renderLojas() {
                     <td>${getStoreSeparator(store) ? escapeHtml(getStoreSeparator(store)) : '<span class="tag danger">Pendente</span>'}</td>
                     <td>${route?.name || '-'}</td>
                     <td>${driver?.name || '-'}</td>
+                    <td>${storeRequiresPromoter(store) ? '<span class="tag ok">Sim</span>' : '<span class="tag warn">Não</span>'}</td>
                     <td>${storeRequiresPromoter(store) ? (promoter?.name || '-') : '<span class="tag info">Sem promotor</span>'}</td>
-                    <td>${storeRequiresPromoter(store) ? '<span class="tag ok">Motorista + promotor</span>' : '<span class="tag warn">Somente motorista</span>'}</td>
+                    <td>${storeRequiresPromoter(store) ? '<span class="tag ok">Motorista + promotor</span>' : '<span class="tag warn">Somente CD + motorista</span>'}</td>
                     <td>${sumQty(stock)}</td>
+                    <td><button type="button" class="btn btn-danger btn-small btn-delete-store" data-id="${store.id}">Excluir</button></td>
                   </tr>
                 `;
               }).join('')}
@@ -9492,6 +9555,12 @@ function renderLojas() {
             <label>Separador
               <input type="text" name="separator" list="separadores-cadastrados" placeholder="Ex.: Matheus" required />
               <datalist id="separadores-cadastrados">${separatorOptions}</datalist>
+            </label>
+            <label>Promotor fixo
+              <select name="hasFixedPromoter" required>
+                <option value="yes">Sim, exige validação do promotor</option>
+                <option value="no">Não, somente CD + motorista</option>
+              </select>
             </label>
           </div>
           <div class="form-actions">
@@ -9551,6 +9620,12 @@ function renderLojas() {
           <div class="form-grid">
             <label>Limite de estoque alto
               <input type="number" name="highStockLimit" min="1" value="100" />
+            </label>
+            <label>Promotor fixo
+              <select name="hasFixedPromoter" required>
+                <option value="yes">Sim, exige validação do promotor</option>
+                <option value="no">Não, somente CD + motorista</option>
+              </select>
             </label>
             <label>Observação
               <input type="text" name="notes" placeholder="Opcional" />
@@ -9622,7 +9697,7 @@ function renderCargaGoiania() {
         <h3>Composição da operação Goiânia</h3>
         <div class="list">
           ${goianiaRoutes.map((route) => {
-            const stores = appState.stores.filter((store) => store.defaultRouteId === route.id);
+            const stores = getActiveStores().filter((store) => store.defaultRouteId === route.id);
             const qty = appState.movements.outbounds.filter((item) => item.date === date && item.routeId === route.id).reduce((acc, item) => addQty(acc, item.qty), emptyQty());
             return `
               <div class="list-item">
@@ -9950,7 +10025,7 @@ function renderUsuarios() {
   }
 
   const sortedUsers = [...appState.users].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
-  const sortedStores = [...appState.stores].sort((a, b) => formatStoreNameForUser(a.name).localeCompare(formatStoreNameForUser(b.name), 'pt-BR'));
+  const sortedStores = getActiveStores().sort((a, b) => formatStoreNameForUser(a.name).localeCompare(formatStoreNameForUser(b.name), 'pt-BR'));
   const sortedRoutes = [...appState.routes].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   const roleOptions = Object.entries(ROLE_LABELS).map(([key, label]) => `<option value="${key}">${label}</option>`).join('');
   const buildStoreOptions = (selectedId) => `
@@ -10125,7 +10200,7 @@ function renderConfiguracoes() {
           <div class="card" style="box-shadow:none">
             <h4>Limite de estoque alto por loja</h4>
             <div class="form-grid-3">
-              ${appState.stores.map((store) => `
+              ${getActiveStores().map((store) => `
                 <label>${store.name}
                   <input type="number" name="limit_${store.id}" min="1" step="1" value="${safeInt(store.highStockLimit)}" />
                 </label>
@@ -10225,7 +10300,7 @@ function bindSaidasEvents() {
     const date = form.querySelector('[name="date"]').value || todayStr();
     const network = networkSelect?.value || '';
     const separator = separatorSelect?.value || '';
-    return [...appState.stores]
+    return getActiveStores()
       .filter((store) => !network || inferStoreNetwork(store) === network)
       .filter((store) => !separator || getStoreSeparator(store) === separator)
       .filter((store) => !hasOutboundForStoreDate(store.id, date))
@@ -10849,7 +10924,7 @@ function bindRotasEvents() {
     if (!exceptionStoreSelect) return;
     const selected = exceptionStoreSelect.value;
     const network = exceptionNetworkSelect?.value || '';
-    const stores = [...appState.stores]
+    const stores = getActiveStores()
       .filter((store) => !network || inferStoreNetwork(store) === network)
       .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
     exceptionStoreSelect.innerHTML = `<option value="">Selecione</option>` + stores
@@ -10975,6 +11050,7 @@ function bindLojasEvents() {
       if (!store) return;
       conciliationForm.network.value = store.network || inferStoreNetwork(store) || '';
       conciliationForm.separator.value = getStoreSeparator(store) || '';
+      if (conciliationForm.hasFixedPromoter) conciliationForm.hasFixedPromoter.value = storeRequiresPromoter(store) ? 'yes' : 'no';
     };
     storeSelect.addEventListener('change', fillConciliationFields);
     conciliationForm.addEventListener('submit', async (event) => {
@@ -10983,11 +11059,25 @@ function bindLojasEvents() {
         storeId: conciliationForm.storeId.value,
         network: conciliationForm.network.value,
         separator: conciliationForm.separator.value,
+        hasFixedPromoter: conciliationForm.hasFixedPromoter?.value || 'yes',
       };
       const result = await persistMutation('UPDATE_STORE_LINKS', payload, 'Conciliação salva com sucesso.');
       if (result.ok) render();
     });
   }
+
+  document.querySelectorAll('.btn-delete-store').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const store = getStoreById(button.dataset.id);
+      if (!store) return;
+      const confirmDelete = window.confirm(`Excluir ${formatStoreNameForUser(store.name)} da lista ativa? Essa ação remove a loja dos lançamentos futuros, mas mantém o histórico já registrado.`);
+      if (!confirmDelete) return;
+      const reason = window.prompt('Informe o motivo da exclusão da loja:');
+      if (reason === null) return;
+      const result = await persistMutation('DELETE_STORE', { storeId: store.id, reason }, 'Loja removida da lista ativa.');
+      if (result.ok) render();
+    });
+  });
 
   const form = document.getElementById('form-nova-loja');
   if (form) {
@@ -10999,6 +11089,7 @@ function bindLojasEvents() {
         routeId: form.routeId.value,
         separator: form.separator?.value || '',
         highStockLimit: form.highStockLimit.value,
+        hasFixedPromoter: form.hasFixedPromoter?.value || 'yes',
         notes: form.notes.value,
       };
       const result = await persistMutation('CREATE_STORE', payload, 'Loja cadastrada com sucesso.');
@@ -11153,7 +11244,7 @@ function bindConfigEvents() {
       manualBaselineByWeekday[weekday] = safeInt(form[`weekday_${weekday}`].value);
     });
     const storeLimits = {};
-    appState.stores.forEach((store) => {
+    getActiveStores().forEach((store) => {
       storeLimits[store.id] = safeInt(form[`limit_${store.id}`].value);
     });
 
@@ -11184,7 +11275,7 @@ function bindInventarioEvents() {
       if (!mandatoryStore) return;
       const selected = mandatoryStore.value;
       const network = mandatoryNetwork?.value || '';
-      const stores = [...appState.stores]
+      const stores = getActiveStores()
         .filter((store) => !network || inferStoreNetwork(store) === network)
         .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
       mandatoryStore.innerHTML = `<option value="">Selecione</option>` + stores
@@ -11250,7 +11341,7 @@ function bindInventarioEvents() {
     if (!formStore || !storeSelect) return;
     const selected = storeSelect.value;
     const network = storeNetworkSelect?.value || '';
-    const stores = [...appState.stores]
+    const stores = getActiveStores()
       .filter((store) => !network || inferStoreNetwork(store) === network)
       .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
     storeSelect.innerHTML = `<option value="">Selecione</option>` + stores

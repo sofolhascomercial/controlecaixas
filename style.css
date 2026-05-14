@@ -1040,3 +1040,9 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   max-height:none;
   margin-top:6px;
 }
+
+.btn-small{
+  padding:8px 10px;
+  border-radius:10px;
+  font-size:.82rem;
+}
