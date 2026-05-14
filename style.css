@@ -1046,3 +1046,10 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   border-radius:10px;
   font-size:.82rem;
 }
+
+.table-select{
+  min-width:150px;
+  padding:8px 10px;
+  border-radius:12px;
+  font-size:.9rem;
+}

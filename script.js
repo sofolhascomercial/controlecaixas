@@ -4824,8 +4824,34 @@ function storeHasFixedPromoter(store) {
   return true;
 }
 
+function getStoreValidationMode(store) {
+  if (!store || store.supportPoint) return 'driver_only';
+  if (['driver_promoter', 'driver_only', 'promoter_only'].includes(store.validationMode)) return store.validationMode;
+  return storeHasFixedPromoter(store) ? 'driver_promoter' : 'driver_only';
+}
+
 function storeRequiresPromoter(store) {
-  return storeHasFixedPromoter(store);
+  const mode = getStoreValidationMode(store);
+  return mode === 'driver_promoter' || mode === 'promoter_only';
+}
+
+function storeRequiresDriver(store) {
+  const mode = getStoreValidationMode(store);
+  return mode === 'driver_promoter' || mode === 'driver_only';
+}
+
+function getStoreValidationLabel(store) {
+  const mode = getStoreValidationMode(store);
+  if (mode === 'promoter_only') return 'Somente promotor';
+  if (mode === 'driver_only') return 'Somente motorista';
+  return 'Motorista + promotor';
+}
+
+function getStoreValidationTagClass(store) {
+  const mode = getStoreValidationMode(store);
+  if (mode === 'promoter_only') return 'info';
+  if (mode === 'driver_only') return 'warn';
+  return 'ok';
 }
 
 function isGoianiaRoute(routeId) {
@@ -5056,10 +5082,15 @@ function ensureStateShape(state) {
     if (link && !String(store.separator || '').trim()) store.separator = link.separator;
     if (link && !String(store.sourceRede || '').trim()) store.sourceRede = link.rede;
     if (typeof store.hasFixedPromoter === 'boolean') {
-      store.noPromoter = !store.hasFixedPromoter || !!store.supportPoint || isBretasStore(store);
+      store.noPromoter = !store.hasFixedPromoter || !!store.supportPoint;
     } else {
       store.noPromoter = !!store.noPromoter || !!store.supportPoint || isBretasStore(store);
     }
+    if (!['driver_promoter', 'driver_only', 'promoter_only'].includes(store.validationMode)) {
+      store.validationMode = store.noPromoter ? 'driver_only' : 'driver_promoter';
+    }
+    if (store.validationMode === 'driver_only') store.noPromoter = true;
+    if (store.validationMode === 'driver_promoter' || store.validationMode === 'promoter_only') store.noPromoter = false;
     store.hasFixedPromoter = !store.noPromoter;
     if (store.noPromoter) store.promoterId = null;
   });
@@ -5376,7 +5407,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     }
     const id = `loja_${slugId(name)}`;
     const hasFixedPromoterInput = String(payload.hasFixedPromoter || '').trim();
-    const noPromoter = hasFixedPromoterInput === 'no' || normalizeText(network).includes('bretas') || payload.noPromoter === true;
+    const requestedValidationMode = ['driver_promoter', 'driver_only', 'promoter_only'].includes(payload.validationMode) ? payload.validationMode : (hasFixedPromoterInput === 'no' ? 'driver_only' : 'driver_promoter');
+    const noPromoter = requestedValidationMode === 'driver_only' || hasFixedPromoterInput === 'no' || payload.noPromoter === true;
     state.stores.push({
       id,
       name,
@@ -5388,6 +5420,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       promoterId: null,
       noPromoter,
       hasFixedPromoter: !noPromoter,
+      validationMode: noPromoter ? 'driver_only' : requestedValidationMode,
       highStockLimit: safeInt(payload.highStockLimit) || 100,
       separator: String(payload.separator || '').trim() || null,
       createdAt: nowIso(),
@@ -5404,22 +5437,44 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const network = String(payload.network || '').trim();
     const separator = String(payload.separator || '').trim();
     const hasFixedPromoterInput = String(payload.hasFixedPromoter || '').trim();
+    const validationModeInput = ['driver_promoter', 'driver_only', 'promoter_only'].includes(payload.validationMode) ? payload.validationMode : (hasFixedPromoterInput === 'no' ? 'driver_only' : getStoreValidationMode(store));
     if (!network) return { ok: false, error: 'Informe a rede da loja.' };
     if (!separator) return { ok: false, error: 'Informe o separador da loja.' };
     if (!['yes', 'no'].includes(hasFixedPromoterInput)) return { ok: false, error: 'Informe se a loja possui promotor fixo.' };
 
-    const previous = `Rede ${store.network || store.rede || '-'} / Separador ${getStoreSeparator(store) || '-'} / Promotor fixo ${storeRequiresPromoter(store) ? 'Sim' : 'Não'}`;
+    const previous = `Rede ${store.network || store.rede || '-'} / Separador ${getStoreSeparator(store) || '-'} / Promotor fixo ${storeHasFixedPromoter(store) ? 'Sim' : 'Não'} / Validação ${getStoreValidationLabel(store)}`;
     store.network = network.toUpperCase();
     store.rede = network.toUpperCase();
     store.separator = separator;
     store.separatorRaw = separator;
-    const noPromoter = hasFixedPromoterInput === 'no' || normalizeText(network).includes('bretas') || !!store.supportPoint;
+    const noPromoter = hasFixedPromoterInput === 'no' || validationModeInput === 'driver_only' || !!store.supportPoint;
+    store.validationMode = noPromoter ? 'driver_only' : validationModeInput;
     store.noPromoter = noPromoter;
     store.hasFixedPromoter = !noPromoter;
     if (store.noPromoter) store.promoterId = null;
     store.conciliatedAt = nowIso();
     store.conciliatedBy = actor.name;
-    audit('Lojas', 'Conciliação de loja', `${store.name}: ${previous} → Rede ${store.network} / Separador ${store.separator} / Promotor fixo ${store.hasFixedPromoter ? 'Sim' : 'Não'}.`);
+    audit('Lojas', 'Conciliação de loja', `${store.name}: ${previous} → Rede ${store.network} / Separador ${store.separator} / Promotor fixo ${store.hasFixedPromoter ? 'Sim' : 'Não'} / Validação ${getStoreValidationLabel(store)}.`);
+  }
+
+  if (type === 'UPDATE_STORE_VALIDATION_SETTINGS') {
+    if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode alterar validação da loja.' };
+    const store = getStoreById(payload.storeId, state);
+    if (!store) return { ok: false, error: 'Loja não encontrada.' };
+    const hasFixedPromoterInput = String(payload.hasFixedPromoter || '').trim();
+    const validationModeInput = String(payload.validationMode || '').trim();
+    if (!['yes', 'no'].includes(hasFixedPromoterInput)) return { ok: false, error: 'Informe se a loja possui promotor fixo.' };
+    if (!['driver_promoter', 'driver_only', 'promoter_only'].includes(validationModeInput)) return { ok: false, error: 'Selecione o tipo de validação.' };
+
+    const previous = `Promotor fixo ${storeHasFixedPromoter(store) ? 'Sim' : 'Não'} / Validação ${getStoreValidationLabel(store)}`;
+    const noPromoter = hasFixedPromoterInput === 'no' || validationModeInput === 'driver_only' || !!store.supportPoint;
+    store.noPromoter = noPromoter;
+    store.hasFixedPromoter = !noPromoter;
+    store.validationMode = noPromoter ? 'driver_only' : validationModeInput;
+    if (store.noPromoter) store.promoterId = null;
+    store.validationUpdatedAt = nowIso();
+    store.validationUpdatedBy = actor.name;
+    audit('Lojas', 'Validação da loja alterada', `${store.name}: ${previous} → Promotor fixo ${store.hasFixedPromoter ? 'Sim' : 'Não'} / Validação ${getStoreValidationLabel(store)}.`);
   }
 
 
@@ -5457,6 +5512,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const store = getStoreById(outbound.storeId, state);
     if (!store) return { ok: false, error: 'Loja não encontrada.' };
     if (actor.role === 'driver' && !isMovementVisibleToUser(outbound, actor, state)) return { ok: false, error: 'Motorista só pode validar entregas da própria rota/carga.' };
+    if (!storeRequiresDriver(store)) return { ok: false, error: 'Esta loja não exige validação do motorista. A entrega deve ser validada pelo promotor.' };
 
     const expectedQty = sanitizeQty(outbound.qty);
     const expectedTotal = sumQty(expectedQty);
@@ -7250,8 +7306,11 @@ function getStoreDayRows(date = todayStr(), state = appState) {
     if (isGoianiaRoute(outbound.routeId) && !transfer && !driverDelivery) {
       status = 'Aguardando distribuição Goiânia';
       tone = 'warn';
-    } else if (!driverDelivery && !receipt) {
+    } else if (storeRequiresDriver(store) && !driverDelivery && !receipt) {
       status = 'Aguardando validação do motorista';
+      tone = 'warn';
+    } else if (!storeRequiresDriver(store) && storeRequiresPromoter(store) && !receipt) {
+      status = 'Aguardando validação do promotor';
       tone = 'warn';
     } else if (driverDelivery && storeRequiresPromoter(store) && !receipt) {
       status = 'Motorista validou / promotor pendente';
@@ -7302,7 +7361,7 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
       return;
     }
 
-    if (!driverDelivery) {
+    if (storeRequiresDriver(store) && !driverDelivery) {
       pendencies.push({
         area: 'Entrega do Motorista',
         responsibleRole: 'driver',
@@ -9487,7 +9546,7 @@ function renderLojas() {
             </select>
           </label>
           <div class="helper-card small">
-            Configure <strong>Promotor fixo</strong> para o sistema saber se precisa validação do promotor. Sem promotor, o controle fica somente CD + motorista.
+            Altere direto na lista se a loja tem promotor fixo e qual validação será exigida.
           </div>
         </div>
         <div class="table-wrap lojas-table-wrap">
@@ -9519,9 +9578,20 @@ function renderLojas() {
                     <td>${getStoreSeparator(store) ? escapeHtml(getStoreSeparator(store)) : '<span class="tag danger">Pendente</span>'}</td>
                     <td>${route?.name || '-'}</td>
                     <td>${driver?.name || '-'}</td>
-                    <td>${storeRequiresPromoter(store) ? '<span class="tag ok">Sim</span>' : '<span class="tag warn">Não</span>'}</td>
+                    <td>
+                      <select class="table-select store-promoter-fixed-select" data-id="${store.id}">
+                        <option value="yes" ${storeHasFixedPromoter(store) ? 'selected' : ''}>Sim</option>
+                        <option value="no" ${!storeHasFixedPromoter(store) ? 'selected' : ''}>Não</option>
+                      </select>
+                    </td>
                     <td>${storeRequiresPromoter(store) ? (promoter?.name || '-') : '<span class="tag info">Sem promotor</span>'}</td>
-                    <td>${storeRequiresPromoter(store) ? '<span class="tag ok">Motorista + promotor</span>' : '<span class="tag warn">Somente CD + motorista</span>'}</td>
+                    <td>
+                      <select class="table-select store-validation-select" data-id="${store.id}">
+                        <option value="driver_promoter" ${getStoreValidationMode(store) === 'driver_promoter' ? 'selected' : ''}>Motorista + promotor</option>
+                        <option value="driver_only" ${getStoreValidationMode(store) === 'driver_only' ? 'selected' : ''}>Somente motorista</option>
+                        <option value="promoter_only" ${getStoreValidationMode(store) === 'promoter_only' ? 'selected' : ''}>Somente promotor</option>
+                      </select>
+                    </td>
                     <td>${sumQty(stock)}</td>
                     <td><button type="button" class="btn btn-danger btn-small btn-delete-store" data-id="${store.id}">Excluir</button></td>
                   </tr>
@@ -9558,8 +9628,15 @@ function renderLojas() {
             </label>
             <label>Promotor fixo
               <select name="hasFixedPromoter" required>
-                <option value="yes">Sim, exige validação do promotor</option>
-                <option value="no">Não, somente CD + motorista</option>
+                <option value="yes">Sim</option>
+                <option value="no">Não</option>
+              </select>
+            </label>
+            <label>Validação
+              <select name="validationMode" required>
+                <option value="driver_promoter">Motorista + promotor</option>
+                <option value="driver_only">Somente motorista</option>
+                <option value="promoter_only">Somente promotor</option>
               </select>
             </label>
           </div>
@@ -9623,8 +9700,15 @@ function renderLojas() {
             </label>
             <label>Promotor fixo
               <select name="hasFixedPromoter" required>
-                <option value="yes">Sim, exige validação do promotor</option>
-                <option value="no">Não, somente CD + motorista</option>
+                <option value="yes">Sim</option>
+                <option value="no">Não</option>
+              </select>
+            </label>
+            <label>Validação
+              <select name="validationMode" required>
+                <option value="driver_promoter">Motorista + promotor</option>
+                <option value="driver_only">Somente motorista</option>
+                <option value="promoter_only">Somente promotor</option>
               </select>
             </label>
             <label>Observação
@@ -11050,7 +11134,8 @@ function bindLojasEvents() {
       if (!store) return;
       conciliationForm.network.value = store.network || inferStoreNetwork(store) || '';
       conciliationForm.separator.value = getStoreSeparator(store) || '';
-      if (conciliationForm.hasFixedPromoter) conciliationForm.hasFixedPromoter.value = storeRequiresPromoter(store) ? 'yes' : 'no';
+      if (conciliationForm.hasFixedPromoter) conciliationForm.hasFixedPromoter.value = storeHasFixedPromoter(store) ? 'yes' : 'no';
+      if (conciliationForm.validationMode) conciliationForm.validationMode.value = getStoreValidationMode(store);
     };
     storeSelect.addEventListener('change', fillConciliationFields);
     conciliationForm.addEventListener('submit', async (event) => {
@@ -11060,6 +11145,7 @@ function bindLojasEvents() {
         network: conciliationForm.network.value,
         separator: conciliationForm.separator.value,
         hasFixedPromoter: conciliationForm.hasFixedPromoter?.value || 'yes',
+        validationMode: conciliationForm.validationMode?.value || 'driver_promoter',
       };
       const result = await persistMutation('UPDATE_STORE_LINKS', payload, 'Conciliação salva com sucesso.');
       if (result.ok) render();
@@ -11079,6 +11165,37 @@ function bindLojasEvents() {
     });
   });
 
+  document.querySelectorAll('.store-promoter-fixed-select').forEach((select) => {
+    select.addEventListener('change', async () => {
+      const store = getStoreById(select.dataset.id);
+      if (!store) return;
+      const validationSelect = document.querySelector(`.store-validation-select[data-id="${store.id}"]`);
+      let validationMode = validationSelect?.value || getStoreValidationMode(store);
+      if (select.value === 'no') validationMode = 'driver_only';
+      if (select.value === 'yes' && validationMode === 'driver_only') validationMode = 'driver_promoter';
+      const result = await persistMutation('UPDATE_STORE_VALIDATION_SETTINGS', {
+        storeId: store.id,
+        hasFixedPromoter: select.value,
+        validationMode,
+      }, 'Validação da loja atualizada.');
+      if (result.ok) render();
+    });
+  });
+
+  document.querySelectorAll('.store-validation-select').forEach((select) => {
+    select.addEventListener('change', async () => {
+      const store = getStoreById(select.dataset.id);
+      if (!store) return;
+      const hasFixedPromoter = select.value === 'driver_only' ? 'no' : 'yes';
+      const result = await persistMutation('UPDATE_STORE_VALIDATION_SETTINGS', {
+        storeId: store.id,
+        hasFixedPromoter,
+        validationMode: select.value,
+      }, 'Validação da loja atualizada.');
+      if (result.ok) render();
+    });
+  });
+
   const form = document.getElementById('form-nova-loja');
   if (form) {
     form.addEventListener('submit', async (event) => {
@@ -11090,6 +11207,7 @@ function bindLojasEvents() {
         separator: form.separator?.value || '',
         highStockLimit: form.highStockLimit.value,
         hasFixedPromoter: form.hasFixedPromoter?.value || 'yes',
+        validationMode: form.validationMode?.value || 'driver_promoter',
         notes: form.notes.value,
       };
       const result = await persistMutation('CREATE_STORE', payload, 'Loja cadastrada com sucesso.');
