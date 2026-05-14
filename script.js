@@ -4415,8 +4415,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
 
   if (type === 'CONFIRM_CD_RETURN') {
     if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode confirmar retorno.' };
-    const qty = sanitizeQty(payload.qty);
-    if (sumQty(qty) <= 0) return { ok: false, error: 'Informe a quantidade recebida no CD.' };
+    const totalQty = safeInt(payload.totalQty ?? sumQty(sanitizeQty(payload.qty)));
+    if (totalQty <= 0) return { ok: false, error: 'Informe o total de caixas que chegou no caminhão.' };
 
     const pendingPickups = state.movements.pickups.filter((item) =>
       isActiveMovement(item) &&
@@ -4427,8 +4427,10 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     );
 
     const expectedQty = pendingPickups.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
-    if (sumQty(expectedQty) <= 0) return { ok: false, error: 'Não há recolhimentos pendentes para esta rota e motorista.' };
+    const expectedTotal = sumQty(expectedQty);
+    if (expectedTotal <= 0) return { ok: false, error: 'Não há recolhimentos pendentes para esta rota e motorista.' };
 
+    const qty = buildQtyFromTotal(totalQty, expectedQty);
     state.cdStock = addQty(getCdStock(state), qty);
 
     const returnBatchId = randomId('ret');
@@ -4438,7 +4440,11 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       routeId: payload.routeId,
       driverId: payload.driverId,
       qty,
+      totalOnly: true,
+      totalQty,
       expectedQty,
+      expectedTotal,
+      pickupsCount: pendingPickups.length,
       createdBy: actor.name,
       createdAt: nowIso(),
       justification: payload.justification || '',
@@ -4447,7 +4453,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       item.returnBatchId = returnBatchId;
     });
 
-    if (JSON.stringify(expectedQty) !== JSON.stringify(qty)) {
+    if (expectedTotal !== totalQty) {
       openDivergence({
         type: 'retorno_cd',
         date: payload.date,
@@ -4456,7 +4462,9 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
         storeId: null,
         expectedQty,
         actualQty: qty,
-        justification: payload.justification || 'Diferença identificada entre o total recolhido e o total que chegou ao CD.',
+        expectedTotal,
+        actualTotal: totalQty,
+        justification: payload.justification || 'Diferença identificada entre o total recolhido nas lojas e o total que chegou ao CD.',
         originJustification: payload.justification || '',
         responsibleUserId: payload.driverId,
         responsibleRole: 'driver',
@@ -4466,7 +4474,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
         responsibleExplanationBy: null,
       });
     }
-    audit('Retornos no CD', 'Conferência de retorno', `Rota ${getRouteById(payload.routeId, state)?.name || '-'} retornou ${sumQty(qty)} caixas ao CD.`);
+    audit('Retornos no CD', 'Conferência de retorno', `Rota ${getRouteById(payload.routeId, state)?.name || '-'} retornou ${totalQty} caixas ao CD.`);
   }
 
   if (type === 'CREATE_ROUTE_EXCEPTION') {
@@ -6703,11 +6711,12 @@ function renderRetornos() {
 
           <div id="retorno-resumo" class="helper-card compact small">Selecione rota e motorista.</div>
 
-
-          ${qtyInputs('retorno')}
+          <label>Total de caixas que chegou no caminhão
+            <input type="number" min="0" step="1" id="retorno-total" name="totalQty" value="0" required />
+          </label>
 
           <label>Justificativa
-            <textarea name="justification" placeholder="Obrigatório quando o total conferido no CD for diferente do total informado pelo motorista."></textarea>
+            <textarea name="justification" placeholder="Obrigatório quando o total que chegou no CD for diferente do total recolhido pelo motorista nas lojas."></textarea>
           </label>
 
           <div class="form-actions">
@@ -6730,8 +6739,8 @@ function renderRetornos() {
                 <small class="muted">${formatDateTimeBR(item.createdAt)}</small>
               </div>
               <div class="muted">${getUserById(item.driverId)?.name || '-'}</div>
-              <div class="kpi-row"><span>Recebido no CD</span><strong>${sumQty(item.qty)} caixas</strong></div>
-              <div class="kpi-row"><span>Informado pelo motorista</span><strong>${sumQty(item.expectedQty)} caixas</strong></div>
+              <div class="kpi-row"><span>Chegou no caminhão</span><strong>${safeInt(item.totalQty ?? sumQty(item.qty))} caixas</strong></div>
+              ${safeInt(item.expectedTotal ?? sumQty(item.expectedQty)) !== safeInt(item.totalQty ?? sumQty(item.qty)) ? '<span class="tag warn">Divergência aberta</span>' : statusTag('ok')}
             </div>
           `).join('') : `<div class="empty">Nenhum retorno confirmado.</div>`}
         </div>
@@ -8768,16 +8777,11 @@ function bindRetornosEvents() {
       return;
     }
     const pending = appState.movements.pickups.filter((item) => isActiveMovement(item) && item.date === date && item.routeId === routeId && item.driverId === driverId && !item.returnBatchId);
-    const total = pending.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
+    const total = pending.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
     summary.innerHTML = `
       <strong>${getRouteById(routeId)?.name || '-'}</strong> • ${getUserById(driverId)?.name || '-'}<br>
-      Total pendente de conferência no CD: <strong>${sumQty(total)} caixas</strong><br>
-      ${BOX_TYPES.map((item) => `${item.label}: <strong>${total[item.key]}</strong>`).join(' • ')}
+      ${pending.length ? 'Há recolhimentos pendentes para conferência no CD.' : 'Não há recolhimentos pendentes para essa seleção.'}
     `;
-    BOX_TYPES.forEach((item) => {
-      const input = form.querySelector(`#retorno-${item.key}`);
-      if (input) input.value = total[item.key];
-    });
   };
 
   routeSelect.addEventListener('change', refreshSummary);
@@ -8787,14 +8791,19 @@ function bindRetornosEvents() {
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const qty = readQtyFromForm(form, 'retorno');
     const payload = {
       date: form.date.value,
       routeId: form.routeId.value,
       driverId: form.driverId.value,
-      qty,
+      totalQty: safeInt(form.totalQty.value),
       justification: form.justification.value.trim(),
     };
+    const pending = appState.movements.pickups.filter((item) => isActiveMovement(item) && item.date === payload.date && item.routeId === payload.routeId && item.driverId === payload.driverId && !item.returnBatchId);
+    const expectedTotal = pending.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+    if (expectedTotal > 0 && expectedTotal !== payload.totalQty) {
+      const confirmDivergence = window.confirm('A quantidade informada está diferente dos recolhimentos registrados pelo motorista. Deseja lançar mesmo assim e abrir uma divergência?');
+      if (!confirmDivergence) return;
+    }
     const result = await persistMutation('CONFIRM_CD_RETURN', payload, 'Retorno conferido com sucesso.');
     if (result.ok) {
       render();
