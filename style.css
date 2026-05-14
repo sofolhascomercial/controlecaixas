@@ -408,6 +408,13 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   padding:16px;
 }
 .helper-card h4{margin:0 0 8px}
+
+.helper-card.compact{
+  padding:10px 12px;
+  border-radius:14px;
+  background:#f9fcfa;
+}
+.page-header.compact{gap:10px}
 .inline-actions{display:flex; gap:10px; flex-wrap:wrap}
 .small{font-size:.85rem}
 .center{text-align:center}
@@ -716,7 +723,7 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   .btn{min-height:46px; border-radius:14px; padding:12px 14px}
 
   .app-shell{min-height:100dvh}
-  .main-area{min-height:100dvh; padding-bottom:92px}
+  .main-area{min-height:100dvh; padding-bottom:0}
 
   .sidebar{width:min(92vw,340px); padding:14px; border-radius:0 22px 22px 0}
   .sidebar-brand{padding:12px}
@@ -740,7 +747,7 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   .menu-toggle{flex:0 0 42px}
   .icon-btn{width:42px; height:42px; border-radius:14px}
 
-  .main-content{padding:12px 12px 98px; gap:14px}
+  .main-content{padding:12px 12px 18px; gap:14px}
   .card{padding:14px; border-radius:18px; box-shadow:0 8px 22px rgba(13,77,44,.07)}
   .cards-grid,.grid-2,.grid-3,.form-grid,.form-grid-3,.stats-inline,.qty-grid{grid-template-columns:1fr!important; gap:12px}
   .metric-value{font-size:1.55rem}
@@ -807,25 +814,9 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   .driver-route-summary{grid-template-columns:1fr!important}
   .route-map-sections{grid-template-columns:1fr!important}
 
-  .toast{left:12px; right:12px; bottom:96px; max-width:none; text-align:center}
+  .toast{left:12px; right:12px; bottom:18px; max-width:none; text-align:center}
 
-  .mobile-quick-nav{
-    position:fixed;
-    left:10px;
-    right:10px;
-    bottom:10px;
-    z-index:900;
-    display:grid;
-    grid-template-columns:repeat(5,1fr);
-    gap:6px;
-    padding:8px;
-    padding-bottom:calc(8px + env(safe-area-inset-bottom));
-    background:rgba(255,255,255,.96);
-    border:1px solid rgba(23,48,34,.12);
-    border-radius:22px;
-    box-shadow:0 14px 38px rgba(13,77,44,.18);
-    backdrop-filter:blur(14px);
-  }
+  .mobile-quick-nav{display:none!important}
   .mobile-nav-btn{
     position:relative;
     min-width:0;
@@ -865,8 +856,6 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
 @media (max-width: 420px){
   .main-content{padding-left:10px; padding-right:10px}
   .card{padding:12px}
-  .mobile-quick-nav{left:6px; right:6px; bottom:6px; gap:4px; padding:6px}
-  .mobile-nav-btn{min-height:50px; font-size:.63rem; border-radius:14px}
   .table-wrap td{flex-direction:column; align-items:stretch; text-align:left; gap:4px}
   .table-wrap td::before{flex:auto}
 }

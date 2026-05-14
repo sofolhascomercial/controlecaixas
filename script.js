@@ -3098,18 +3098,18 @@ const NAV_ITEMS = [
   { key: 'recebimentos', label: 'Recebimento na Loja', roles: ['admin', 'promoter'] },
   { key: 'recolhimentos', label: 'Recolhimentos', roles: ['admin', 'driver'] },
   { key: 'retornos', label: 'Retornos no CD', roles: ['admin', 'cd'] },
-  { key: 'estoque', label: 'Estoque em Loja', roles: ['admin', 'cd', 'driver', 'promoter', 'viewer'] },
-  { key: 'inventario', label: 'Inventário', roles: ['admin', 'promoter'] },
-  { key: 'divergencias', label: 'Divergências', roles: ['admin', 'cd', 'driver', 'viewer'] },
-  { key: 'alertas', label: 'Alertas', roles: ['admin', 'cd', 'driver', 'promoter', 'viewer'] },
-  { key: 'fechamento', label: 'Fechamento do Dia', roles: ['admin', 'cd', 'viewer'] },
-  { key: 'pendencias', label: 'Pendências', roles: ['admin', 'cd', 'driver', 'promoter', 'viewer'] },
+  { key: 'estoque', label: 'Estoque em Loja', roles: ['admin', 'driver', 'promoter'] },
+  { key: 'inventario', label: 'Inventário', roles: ['admin', 'driver', 'promoter'] },
+  { key: 'divergencias', label: 'Divergências', roles: ['admin', 'cd', 'driver'] },
+  { key: 'alertas', label: 'Alertas', roles: ['admin', 'driver', 'promoter'] },
+  { key: 'fechamento', label: 'Fechamento do Dia', roles: ['admin'] },
+  { key: 'pendencias', label: 'Pendências', roles: ['admin', 'cd', 'driver', 'promoter'] },
   { key: 'estornos', label: 'Estornos e Correções', roles: ['admin'] },
   { key: 'rotas', label: 'Rotas e Motoristas', roles: ['admin'] },
   { key: 'lojas', label: 'Lojas', roles: ['admin'] },
   { key: 'cargaGoiania', label: 'Carga Goiânia', roles: ['admin', 'driver', 'cd'] },
   { key: 'distribuicaoGoiania', label: 'Distribuição Goiânia', roles: ['admin', 'driver', 'cd'] },
-  { key: 'relatorios', label: 'Relatórios', roles: ['admin', 'cd', 'viewer'] },
+  { key: 'relatorios', label: 'Relatórios', roles: ['admin'] },
   { key: 'usuarios', label: 'Usuários', roles: ['admin'] },
   { key: 'configuracoes', label: 'Configurações', roles: ['admin'] },
 ];
@@ -3118,8 +3118,8 @@ const MOBILE_PRIORITY_BY_ROLE = {
   admin: ['dashboard', 'pendencias', 'fechamento', 'divergencias'],
   cd: ['dashboard', 'saidas', 'retornos', 'pendencias'],
   driver: ['dashboard', 'entregasMotorista', 'recolhimentos', 'pendencias'],
-  promoter: ['recebimentos', 'pendencias', 'estoque', 'alertas'],
-  viewer: ['dashboard', 'estoque', 'divergencias', 'relatorios'],
+  promoter: ['dashboard', 'recebimentos', 'pendencias', 'estoque'],
+  viewer: ['dashboard', 'estoque', 'divergencias'],
 };
 
 const MOBILE_ICON_BY_VIEW = {
@@ -3507,11 +3507,14 @@ function mustChangePassword(user) {
 
 function canAccessView(viewKey, user = currentUser) {
   const item = NAV_ITEMS.find((nav) => nav.key === viewKey);
-  return !!item && !!user && item.roles.includes(user.role);
+  if (!item || !user || !item.roles.includes(user.role)) return false;
+  if (viewKey === 'cargaGoiania' && user.role === 'driver') return isGoianiaTrunkUser(user);
+  if (viewKey === 'distribuicaoGoiania' && user.role === 'driver') return isGoianiaTrunkUser(user);
+  return true;
 }
 
 function getFirstAllowedView(user = currentUser) {
-  return NAV_ITEMS.find((item) => item.roles.includes(user?.role))?.key || 'dashboard';
+  return NAV_ITEMS.find((item) => canAccessView(item.key, user))?.key || 'dashboard';
 }
 
 function getUserAccessTarget(user, state = appState) {
@@ -3637,6 +3640,12 @@ function ensureStateShape(state) {
   base.divergences = Array.isArray(base.divergences) ? base.divergences : [];
   base.audit = Array.isArray(base.audit) ? base.audit : [];
   base.dayClosings = Array.isArray(base.dayClosings) ? base.dayClosings : [];
+  base.mandatoryInventories = Array.isArray(base.mandatoryInventories) ? base.mandatoryInventories.map((item) => ({
+    ...item,
+    storeIds: Array.isArray(item.storeIds) ? item.storeIds : [],
+    completedStoreIds: Array.isArray(item.completedStoreIds) ? item.completedStoreIds : [],
+    status: item.status || 'ativa',
+  })) : [];
   base.settings = base.settings || {
     safetyMargin: 50,
     criticalShortagePercent: 0,
@@ -3726,6 +3735,7 @@ function createSeedState() {
     divergences: [],
     audit: [],
     dayClosings: [],
+    mandatoryInventories: [],
     settings: {
       safetyMargin: 50,
       criticalShortagePercent: 0,
@@ -3997,11 +4007,13 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
   }
 
   if (type === 'CONFIRM_DRIVER_DELIVERY') {
+    if (!['admin', 'driver'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou motorista pode validar entrega.' };
     const outbound = state.movements.outbounds.find((item) => item.id === payload.outboundId);
     if (!outbound) return { ok: false, error: 'Saída não encontrada.' };
     if (outbound.driverDeliveryId) return { ok: false, error: 'O motorista já validou esta entrega.' };
     const store = getStoreById(outbound.storeId, state);
     if (!store) return { ok: false, error: 'Loja não encontrada.' };
+    if (actor.role === 'driver' && !isMovementVisibleToUser(outbound, actor, state)) return { ok: false, error: 'Motorista só pode validar entregas da própria rota/carga.' };
 
     const expectedQty = sanitizeQty(outbound.qty);
     const expectedTotal = sumQty(expectedQty);
@@ -4138,6 +4150,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
 
   if (type === 'CREATE_GOIANIA_TRANSFER') {
     if (!['admin', 'driver', 'cd'].includes(actor.role)) return { ok: false, error: 'Usuário sem permissão para registrar distribuição Goiânia.' };
+    if (actor.role === 'driver' && !isGoianiaTrunkUser(actor)) return { ok: false, error: 'Somente Vinicius/Sebastião podem registrar distribuição Goiânia.' };
     const date = payload.date || todayStr();
     const driver = getUserById(payload.driverId, state);
     if (!driver || driver.role !== 'driver') return { ok: false, error: 'Selecione o motorista/freteiro que recebeu a carga.' };
@@ -4167,6 +4180,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
   }
 
   if (type === 'CREATE_OUTBOUND') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode lançar saídas.' };
     const qty = sanitizeQty(payload.qty);
     if (sumQty(qty) <= 0) return { ok: false, error: 'Informe pelo menos uma quantidade para saída.' };
 
@@ -4200,10 +4214,12 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
   }
 
   if (type === 'CONFIRM_RECEIPT') {
+    if (!['admin', 'promoter'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou promotor pode confirmar recebimento.' };
     const outbound = state.movements.outbounds.find((item) => item.id === payload.outboundId);
     if (!outbound) return { ok: false, error: 'Saída não encontrada.' };
     if (outbound.receiptId) return { ok: false, error: 'Esta saída já foi confirmada.' };
     const receiptStore = getStoreById(outbound.storeId, state);
+    if (actor.role === 'promoter' && outbound.storeId !== actor.storeId) return { ok: false, error: 'Promotor só pode confirmar recebimento da própria loja.' };
     if (!storeRequiresPromoter(receiptStore)) return { ok: false, error: 'Esta loja não exige validação do promotor. A entrega deve ser validada somente pelo motorista.' };
     const qty = sanitizeQty(payload.qty);
     if (sumQty(qty) <= 0) return { ok: false, error: 'Informe a quantidade recebida.' };
@@ -4246,6 +4262,9 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
   }
 
   if (type === 'CREATE_PICKUP') {
+    if (!['admin', 'driver'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou motorista pode registrar recolhimento.' };
+    if (actor.role === 'driver' && String(payload.driverId) !== actor.id) return { ok: false, error: 'Motorista só pode registrar recolhimento no próprio acesso.' };
+    if (actor.role === 'driver' && !canUserSeeStore(payload.storeId, actor, payload.date || todayStr(), state)) return { ok: false, error: 'Motorista só pode recolher lojas da própria rota/carga.' };
     const totalQty = safeInt(payload.totalQty ?? sumQty(sanitizeQty(payload.qty)));
     if (totalQty <= 0) return { ok: false, error: 'Informe a quantidade recolhida.' };
 
@@ -4274,6 +4293,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
   }
 
   if (type === 'CONFIRM_CD_RETURN') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode confirmar retorno.' };
     const qty = sanitizeQty(payload.qty);
     if (sumQty(qty) <= 0) return { ok: false, error: 'Informe a quantidade recebida no CD.' };
 
@@ -4440,14 +4460,39 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     );
   }
 
+  if (type === 'SCHEDULE_MANDATORY_INVENTORY') {
+    if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode programar inventário obrigatório.' };
+    const date = String(payload.date || '').trim();
+    if (!date) return { ok: false, error: 'Informe a data do inventário obrigatório.' };
+    const stores = getStoresForMandatoryScope(payload, state);
+    if (!stores.length) return { ok: false, error: 'Nenhuma loja encontrada para essa programação.' };
+    const storeIds = stores.map((store) => store.id);
+    const scope = payload.scope || 'all';
+    const label = scope === 'network' ? `rede ${payload.network}` : scope === 'store' ? `loja ${stores[0]?.name || '-'}` : 'todas as lojas';
+    state.mandatoryInventories.unshift({
+      id: randomId('mandinv'),
+      date,
+      scope,
+      network: payload.network || null,
+      storeIds,
+      completedStoreIds: [],
+      notes: String(payload.notes || '').trim(),
+      status: 'ativa',
+      createdBy: actor.name,
+      createdById: actor.id,
+      createdAt: nowIso(),
+    });
+    audit('Inventário', 'Inventário obrigatório programado', `${formatDateBR(date)} para ${label}: ${storeIds.length} loja(s).`);
+  }
+
   if (type === 'APPLY_INVENTORY') {
-    if (!['admin', 'promoter'].includes(actor.role)) {
+    if (!['admin', 'driver', 'promoter'].includes(actor.role)) {
       return { ok: false, error: 'Usuário sem permissão para lançar inventário.' };
     }
 
     const location = payload.location === 'cd' ? 'cd' : 'store';
     const qty = sanitizeQty(payload.qty);
-    const date = payload.date || todayStr();
+    const date = todayStr();
     const notes = (payload.notes || '').trim();
 
     if (location === 'cd' && actor.role !== 'admin') {
@@ -4460,6 +4505,10 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
 
     if (actor.role === 'promoter' && payload.storeId !== actor.storeId) {
       return { ok: false, error: 'Promotor só pode lançar inventário da própria loja.' };
+    }
+
+    if (actor.role === 'driver' && !canUserSeeStore(payload.storeId, actor, date, state)) {
+      return { ok: false, error: 'Motorista só pode lançar inventário de loja vinculada à sua rota/carga.' };
     }
 
     const previousQty = location === 'cd' ? getCdStock(state) : getStoreStock(payload.storeId, state);
@@ -4491,6 +4540,12 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
 
     state.movements.inventories.unshift(inventoryRecord);
     state.movements.inventories = state.movements.inventories.slice(0, 300);
+
+    if (location === 'store' && payload.storeId) {
+      inventoryRecord.mandatoryInventoryIds = getPendingMandatoryInventoriesForStore(payload.storeId, date, state).map((schedule) => schedule.id);
+      inventoryRecord.mandatoryInventoryId = inventoryRecord.mandatoryInventoryIds[0] || null;
+      markMandatoryInventoriesDoneForStore(payload.storeId, date, state);
+    }
 
     if (hasDivergence) {
       openDivergence({
@@ -4768,7 +4823,7 @@ function render() {
 
 function renderSidebar() {
   const counts = getDynamicCounts();
-  const allowed = NAV_ITEMS.filter((item) => item.roles.includes(currentUser.role));
+  const allowed = NAV_ITEMS.filter((item) => canAccessView(item.key, currentUser));
   els.sidebarNav.innerHTML = allowed.map((item) => `
     <button class="nav-link ${currentView === item.key ? 'active' : ''}" data-view="${item.key}">
       <span>${item.label}</span>
@@ -4787,12 +4842,14 @@ function renderSidebar() {
 
 function getDynamicCounts() {
   const alerts = getAllAlerts(appState);
-  const openDivergences = appState.divergences.filter((div) => div.status === 'aberta').length;
-  const pendingCount = getOperationalPendencies(todayStr(), appState).length;
+  const openDivergences = getVisibleDivergences(appState, currentUser).filter((div) => div.status === 'aberta').length;
+  const pendingCount = getVisiblePendenciesForCurrentUser(todayStr()).length;
+  const mandatoryCount = getPendingMandatoryInventoriesForUser(currentUser, todayStr(), appState).length;
   return {
     divergencias: openDivergences,
-    alertas: alerts.length,
+    alertas: alerts.length + mandatoryCount,
     pendencias: pendingCount,
+    inventario: mandatoryCount,
   };
 }
 
@@ -4833,39 +4890,8 @@ function renderCurrentView() {
 }
 
 function renderMobileQuickNav() {
-  if (!els.mobileQuickNav || !currentUser) return;
-  const allowed = NAV_ITEMS.filter((item) => item.roles.includes(currentUser.role));
-  const counts = getDynamicCounts();
-  const priority = MOBILE_PRIORITY_BY_ROLE[currentUser.role] || ['dashboard'];
-  const shortcuts = priority
-    .map((key) => allowed.find((item) => item.key === key))
-    .filter(Boolean)
-    .slice(0, 4);
-
-  els.mobileQuickNav.innerHTML = `${shortcuts.map((item) => `
-    <button class="mobile-nav-btn ${currentView === item.key ? 'active' : ''}" data-view="${item.key}">
-      <span class="mobile-nav-icon">${MOBILE_ICON_BY_VIEW[item.key] || '•'}</span>
-      <span>${item.label.replace(' do CD', '').replace(' na Loja', '')}</span>
-      ${counts[item.key] ? `<small>${counts[item.key]}</small>` : ''}
-    </button>
-  `).join('')}
-    <button class="mobile-nav-btn mobile-menu-btn" data-mobile-menu="true">
-      <span class="mobile-nav-icon">☰</span>
-      <span>Menu</span>
-    </button>
-  `;
-
-  els.mobileQuickNav.querySelectorAll('[data-view]').forEach((button) => {
-    button.addEventListener('click', () => {
-      currentView = button.dataset.view;
-      render();
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
-  });
-
-  els.mobileQuickNav.querySelector('[data-mobile-menu]')?.addEventListener('click', () => {
-    els.sidebar.classList.add('open');
-  });
+  // Barra inferior mobile removida a pedido: navegação apenas pelo botão de menu (☰).
+  if (els.mobileQuickNav) els.mobileQuickNav.innerHTML = '';
 }
 
 function enhanceMobileTables() {
@@ -4908,15 +4934,123 @@ function getEffectiveDriver(routeId, date = todayStr(), storeId = null, state = 
   return getRouteById(routeId, state)?.driverId || null;
 }
 
-function getTodayMetrics(state = appState) {
+function canSeeGlobalData(user = currentUser) {
+  return !!user && ['admin', 'viewer'].includes(user.role);
+}
+
+function getDriverRouteIds(user = currentUser, state = appState) {
+  if (!user || user.role !== 'driver') return [];
+  const ids = new Set();
+  if (user.routeId) ids.add(user.routeId);
+  state.routes.forEach((route) => {
+    if (route.driverId === user.id) ids.add(route.id);
+  });
+  if (isGoianiaTrunkUser(user)) {
+    GOIANIA_ROUTE_IDS.forEach((id) => ids.add(id));
+    ids.add(GOIANIA_TRUNK_ROUTE_ID);
+  }
+  return [...ids];
+}
+
+function canUserSeeRoute(routeId, user = currentUser, state = appState) {
+  if (!user || !routeId) return false;
+  if (canSeeGlobalData(user)) return true;
+  if (user.role === 'cd') return false;
+  if (user.role === 'driver') return getDriverRouteIds(user, state).includes(routeId);
+  if (user.role === 'promoter' && user.storeId) {
+    const store = getStoreById(user.storeId, state);
+    return !!store && (store.defaultRouteId === routeId || store.sundayRouteId === routeId);
+  }
+  return false;
+}
+
+function canUserSeeStore(storeId, user = currentUser, date = todayStr(), state = appState) {
+  if (!user || !storeId) return false;
+  if (canSeeGlobalData(user)) return true;
+  if (user.role === 'promoter') return user.storeId === storeId;
+  if (user.role === 'driver') {
+    const routeId = getEffectiveRoute(storeId, date, state);
+    if (canUserSeeRoute(routeId, user, state)) return true;
+    return (state.movements.goianiaTransfers || []).some((item) =>
+      isActiveMovement(item) && item.storeId === storeId && item.driverId === user.id && (!date || item.date === date)
+    );
+  }
+  return false;
+}
+
+function getVisibleStores(state = appState, user = currentUser, date = todayStr()) {
+  if (!user) return [];
+  if (canSeeGlobalData(user)) return state.stores;
+  if (user.role === 'promoter') return state.stores.filter((store) => store.id === user.storeId);
+  if (user.role === 'driver') return state.stores.filter((store) => canUserSeeStore(store.id, user, date, state));
+  return [];
+}
+
+function getVisibleRoutes(state = appState, user = currentUser) {
+  if (!user) return [];
+  if (canSeeGlobalData(user)) return state.routes;
+  if (user.role === 'driver') return state.routes.filter((route) => canUserSeeRoute(route.id, user, state));
+  if (user.role === 'promoter' && user.storeId) {
+    const store = getStoreById(user.storeId, state);
+    const ids = new Set([store?.defaultRouteId, store?.sundayRouteId].filter(Boolean));
+    return state.routes.filter((route) => ids.has(route.id));
+  }
+  return [];
+}
+
+function isMovementVisibleToUser(item, user = currentUser, state = appState) {
+  if (!user || !item) return false;
+  if (canSeeGlobalData(user)) return true;
+  if (user.role === 'cd') return true;
+  if (user.role === 'promoter') return item.storeId === user.storeId;
+  if (user.role === 'driver') {
+    if (item.driverId === user.id || item.originalDriverId === user.id || item.goianiaTransferDriverId === user.id) return true;
+    if (item.routeId && canUserSeeRoute(item.routeId, user, state)) return true;
+    if (item.storeId && canUserSeeStore(item.storeId, user, item.date || todayStr(), state)) return true;
+  }
+  return false;
+}
+
+function isDivergenceVisibleToUser(div, user = currentUser, state = appState) {
+  if (!user || !div) return false;
+  if (canSeeGlobalData(user)) return true;
+  if (user.role === 'cd') return ['retorno_cd', 'inventario_cd', 'carga_goiania'].includes(div.type);
+  if (user.role === 'driver') {
+    return div.driverId === user.id || div.responsibleUserId === user.id || canUserSeeRoute(div.routeId, user, state) || canUserSeeStore(div.storeId, user, div.date || todayStr(), state);
+  }
+  if (user.role === 'promoter') return div.storeId === user.storeId || div.responsibleUserId === user.id;
+  return false;
+}
+
+function getVisibleDivergences(state = appState, user = currentUser) {
+  return state.divergences.filter((item) => isDivergenceVisibleToUser(item, user, state));
+}
+
+function getPermissionLabel(user, state = appState) {
+  if (!user) return '-';
+  if (user.role === 'admin') return 'Acesso total ao sistema';
+  if (user.role === 'viewer') return 'Visualização geral somente pela Dashboard';
+  if (user.role === 'cd') return 'CD: saídas, retornos e pendências do CD';
+  if (user.role === 'driver') return `Motorista: somente ${getUserAccessTarget(user, state)}`;
+  if (user.role === 'promoter') return `Promotor: somente ${formatStoreNameForUser(getUserAccessTarget(user, state))}`;
+  return 'Permissão padrão do perfil';
+}
+
+function getTodayMetrics(state = appState, user = currentUser) {
   const today = todayStr();
-  const sent = state.movements.outbounds.filter((item) => isActiveMovement(item) && item.date === today && item.status !== 'historico').reduce((acc, item) => acc + sumQty(item.qty), 0);
-  const confirmed = state.movements.receipts.filter((item) => isActiveMovement(item) && item.date === today).reduce((acc, item) => acc + sumQty(item.qty), 0);
-  const pickups = state.movements.pickups.filter((item) => isActiveMovement(item) && item.date === today).reduce((acc, item) => acc + sumQty(item.qty), 0);
-  const returns = state.movements.returns.filter((item) => isActiveMovement(item) && item.date === today).reduce((acc, item) => acc + sumQty(item.qty), 0);
-  const company = sumQty(state.cdStock);
-  const stores = Object.values(state.storeStocks).reduce((acc, qty) => acc + sumQty(qty), 0);
-  const inReturn = state.movements.pickups.filter((item) => isActiveMovement(item) && !item.returnBatchId).reduce((acc, item) => acc + sumQty(item.qty), 0);
+  const inScope = (item) => isMovementVisibleToUser(item, user, state);
+  const outbounds = state.movements.outbounds.filter((item) => isActiveMovement(item) && item.date === today && item.status !== 'historico' && inScope(item));
+  const receipts = state.movements.receipts.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
+  const pickupsToday = state.movements.pickups.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
+  const returnsToday = state.movements.returns.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
+  const sent = outbounds.reduce((acc, item) => acc + sumQty(item.qty), 0);
+  const confirmed = receipts.reduce((acc, item) => acc + sumQty(item.qty), 0);
+  const pickups = pickupsToday.reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
+  const returns = returnsToday.reduce((acc, item) => acc + sumQty(item.qty), 0);
+  const company = (user?.role === 'promoter' || user?.role === 'driver') ? 0 : sumQty(state.cdStock);
+  const visibleStores = getVisibleStores(state, user, today);
+  const stores = visibleStores.reduce((acc, store) => acc + sumQty(getStoreStock(store.id, state)), 0);
+  const inReturn = state.movements.pickups.filter((item) => isActiveMovement(item) && !item.returnBatchId && inScope(item)).reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
   return { sent, confirmed, pickups, returns, company, stores, inReturn };
 }
 
@@ -4948,14 +5082,14 @@ function getForecast(state = appState, date = todayStr()) {
   return { weekday, predicted, source };
 }
 
-function getStoreStockRows(state = appState) {
-  return state.stores.map((store) => {
+function getStoreStockRows(state = appState, user = currentUser, date = todayStr()) {
+  return getVisibleStores(state, user, date).map((store) => {
     const qty = getStoreStock(store.id, state);
     return {
       store,
       qty,
       total: sumQty(qty),
-      routeId: getEffectiveRoute(store.id, todayStr(), state),
+      routeId: getEffectiveRoute(store.id, date, state),
       isHigh: sumQty(qty) > safeInt(store.highStockLimit),
     };
   }).sort((a, b) => b.total - a.total);
@@ -4967,25 +5101,27 @@ function getAllAlerts(state = appState) {
   const companyTotal = sumQty(getCdStock(state));
   const safetyTarget = forecast.predicted + safeInt(state.settings.safetyMargin);
 
-  if (companyTotal < forecast.predicted) {
-    alerts.push({
-      id: 'critical_stock',
-      priority: 'critical',
-      title: 'Estoque crítico no CD',
-      description: `${weekdayName(forecast.weekday)} costuma exigir ${forecast.predicted} caixas. O CD tem ${companyTotal}.`,
-      detail: `Déficit estimado: ${forecast.predicted - companyTotal} caixas.`,
-    });
-  } else if (companyTotal < safetyTarget) {
-    alerts.push({
-      id: 'warning_stock',
-      priority: 'warning',
-      title: 'Estoque abaixo da margem de segurança',
-      description: `${weekdayName(forecast.weekday)} tem previsão de ${forecast.predicted} caixas e margem de segurança de ${safeInt(state.settings.safetyMargin)}.`,
-      detail: `Estoque atual: ${companyTotal} caixas.`,
-    });
+  if (['admin', 'viewer', 'cd'].includes(currentUser?.role)) {
+    if (companyTotal < forecast.predicted) {
+      alerts.push({
+        id: 'critical_stock',
+        priority: 'critical',
+        title: 'Estoque crítico no CD',
+        description: `${weekdayName(forecast.weekday)} costuma exigir ${forecast.predicted} caixas. O CD tem ${companyTotal}.`,
+        detail: `Déficit estimado: ${forecast.predicted - companyTotal} caixas.`,
+      });
+    } else if (companyTotal < safetyTarget) {
+      alerts.push({
+        id: 'warning_stock',
+        priority: 'warning',
+        title: 'Estoque abaixo da margem de segurança',
+        description: `${weekdayName(forecast.weekday)} tem previsão de ${forecast.predicted} caixas e margem de segurança de ${safeInt(state.settings.safetyMargin)}.`,
+        detail: `Estoque atual: ${companyTotal} caixas.`,
+      });
+    }
   }
 
-  getStoreStockRows(state).filter((row) => row.isHigh).forEach((row) => {
+  getStoreStockRows(state, currentUser).filter((row) => row.isHigh).forEach((row) => {
     alerts.push({
       id: `high_${row.store.id}`,
       priority: 'warning',
@@ -4995,7 +5131,7 @@ function getAllAlerts(state = appState) {
     });
   });
 
-  state.divergences.filter((div) => div.status === 'aberta').forEach((div) => {
+  getVisibleDivergences(state, currentUser).filter((div) => div.status === 'aberta').forEach((div) => {
     alerts.push({
       id: div.id,
       priority: 'critical',
@@ -5344,7 +5480,7 @@ function getDayOperationSummary(date = todayStr(), state = appState) {
 }
 
 function getStoreDayRows(date = todayStr(), state = appState) {
-  const outbounds = state.movements.outbounds.filter((item) => isActiveMovement(item) && item.date === date && item.status !== 'historico');
+  const outbounds = state.movements.outbounds.filter((item) => isActiveMovement(item) && item.date === date && item.status !== 'historico' && isMovementVisibleToUser(item, currentUser, state));
   const rows = outbounds.map((outbound) => {
     const store = getStoreById(outbound.storeId, state);
     const route = getRouteById(outbound.routeId, state);
@@ -5455,6 +5591,25 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
       });
     });
 
+  (state.mandatoryInventories || [])
+    .filter((schedule) => schedule.status !== 'cancelada' && schedule.date === date)
+    .forEach((schedule) => {
+      getMandatoryInventoryStoreIds(schedule, state).forEach((storeId) => {
+        if (!isMandatoryInventoryPendingForStore(schedule, storeId, state)) return;
+        const store = getStoreById(storeId, state);
+        pendencies.push({
+          area: 'Inventário obrigatório',
+          responsibleRole: 'promoter',
+          responsibleUserId: store?.promoterId || null,
+          responsibleName: storeRequiresPromoter(store) ? (getUserById(store?.promoterId, state)?.name || 'Promotor da loja') : 'ADM / loja sem promotor',
+          storeId,
+          routeId: getEffectiveRoute(storeId, date, state),
+          description: `${store?.name || '-'} precisa realizar inventário obrigatório em ${formatDateBR(date)}.`,
+          priority: 'danger',
+        });
+      });
+    });
+
   state.divergences
     .filter((div) => div.status === 'aberta' && (!date || div.date === date))
     .forEach((div) => {
@@ -5477,22 +5632,118 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
 function getVisiblePendenciesForCurrentUser(date = todayStr()) {
   const items = getOperationalPendencies(date, appState);
   if (!currentUser) return [];
-  if (['admin', 'cd', 'viewer'].includes(currentUser.role)) return items;
+  if (currentUser.role === 'admin' || currentUser.role === 'viewer') return items;
+  if (currentUser.role === 'cd') {
+    return items.filter((item) => item.responsibleRole === 'cd' || item.area === 'Retorno no CD' || item.area === 'Aprovação ADM');
+  }
   if (currentUser.role === 'driver') {
-    return items.filter((item) => item.responsibleRole === 'driver' && (!item.responsibleUserId || item.responsibleUserId === currentUser.id || item.responsibleName === 'Vinicius/Sebastião'));
+    return items.filter((item) =>
+      item.responsibleRole === 'driver' &&
+      (!item.responsibleUserId || item.responsibleUserId === currentUser.id || (isGoianiaTrunkUser(currentUser) && item.responsibleName === 'Vinicius/Sebastião')) &&
+      (!item.storeId || canUserSeeStore(item.storeId, currentUser, date, appState))
+    );
   }
   if (currentUser.role === 'promoter') {
-    return items.filter((item) => item.responsibleRole === 'promoter' && (!item.responsibleUserId || item.responsibleUserId === currentUser.id || item.storeId === currentUser.storeId));
+    return items.filter((item) => item.storeId === currentUser.storeId || (item.responsibleRole === 'promoter' && item.responsibleUserId === currentUser.id));
   }
-  return items;
+  return [];
 }
 
 function getClosingForDate(date, state = appState) {
   return (state.dayClosings || []).find((item) => item.date === date && !item.canceledAt) || null;
 }
 
+function getStoresForMandatoryScope(payload, state = appState) {
+  const scope = payload?.scope || 'all';
+  if (scope === 'store') {
+    const store = getStoreById(payload.storeId, state);
+    return store ? [store] : [];
+  }
+  if (scope === 'network') {
+    const network = String(payload.network || '').trim();
+    return state.stores.filter((store) => (store.network || store.rede || '') === network);
+  }
+  return state.stores.slice();
+}
+
+function getMandatoryInventoryStoreIds(schedule, state = appState) {
+  const ids = Array.isArray(schedule?.storeIds) ? schedule.storeIds : [];
+  const validIds = new Set(state.stores.map((store) => store.id));
+  return ids.filter((id) => validIds.has(id));
+}
+
+function isMandatoryInventoryPendingForStore(schedule, storeId, state = appState) {
+  if (!schedule || schedule.status === 'cancelada' || !storeId) return false;
+  const storeIds = getMandatoryInventoryStoreIds(schedule, state);
+  if (!storeIds.includes(storeId)) return false;
+  const completedIds = Array.isArray(schedule.completedStoreIds) ? schedule.completedStoreIds : [];
+  if (completedIds.includes(storeId)) return false;
+  const hasInventoryRecord = (state.movements.inventories || []).some((item) =>
+    isActiveMovement(item) && item.location === 'store' && item.storeId === storeId && item.date === schedule.date && item.mandatoryInventoryId === schedule.id
+  );
+  return !hasInventoryRecord;
+}
+
+function getPendingMandatoryInventoriesForStore(storeId, date = todayStr(), state = appState) {
+  return (state.mandatoryInventories || [])
+    .filter((schedule) => schedule.status !== 'cancelada' && schedule.date === date && isMandatoryInventoryPendingForStore(schedule, storeId, state));
+}
+
+function getPendingMandatoryInventoriesForUser(user = currentUser, date = todayStr(), state = appState) {
+  if (!user) return [];
+  const schedules = (state.mandatoryInventories || []).filter((schedule) => schedule.status !== 'cancelada' && schedule.date === date);
+  const rows = [];
+  schedules.forEach((schedule) => {
+    getMandatoryInventoryStoreIds(schedule, state).forEach((storeId) => {
+      if (!isMandatoryInventoryPendingForStore(schedule, storeId, state)) return;
+      if (user.role === 'promoter' && user.storeId !== storeId) return;
+      if (user.role === 'driver' && !canUserSeeStore(storeId, user, date, state)) return;
+      if (user.role === 'cd') return;
+      const store = getStoreById(storeId, state);
+      rows.push({ schedule, store, storeId });
+    });
+  });
+  return rows;
+}
+
+function renderMandatoryInventoryNotice(date = todayStr()) {
+  const pending = getPendingMandatoryInventoriesForUser(currentUser, date, appState);
+  if (!pending.length) return '';
+  const isPromoter = currentUser?.role === 'promoter';
+  const title = isPromoter ? 'Inventário obrigatório da sua loja' : 'Inventário obrigatório pendente';
+  const stores = pending.slice(0, 6).map((item) => item.store?.name || '-').join(', ');
+  return `
+    <div class="alert-strip critical mandatory-inventory-alert">
+      <div>
+        <strong>${title}</strong>
+        <div class="muted">Data: ${formatDateBR(date)}. ${isPromoter ? 'A mensagem só sai depois que o inventário for realizado.' : `${pending.length} loja(s) pendente(s): ${stores}${pending.length > 6 ? '...' : ''}`}</div>
+      </div>
+      <button class="btn btn-primary btn-go-inventory" type="button">Fazer inventário</button>
+    </div>
+  `;
+}
+
+function markMandatoryInventoriesDoneForStore(storeId, date, state = appState) {
+  (state.mandatoryInventories || [])
+    .filter((schedule) => {
+      if (schedule.status === 'cancelada' || schedule.date !== date) return false;
+      const storeIds = getMandatoryInventoryStoreIds(schedule, state);
+      const completedIds = Array.isArray(schedule.completedStoreIds) ? schedule.completedStoreIds : [];
+      return storeIds.includes(storeId) && !completedIds.includes(storeId);
+    })
+    .forEach((schedule) => {
+      schedule.completedStoreIds = Array.isArray(schedule.completedStoreIds) ? schedule.completedStoreIds : [];
+      if (!schedule.completedStoreIds.includes(storeId)) schedule.completedStoreIds.push(storeId);
+      const storeIds = getMandatoryInventoryStoreIds(schedule, state);
+      if (storeIds.length && storeIds.every((id) => schedule.completedStoreIds.includes(id))) {
+        schedule.status = 'concluida';
+        schedule.completedAt = nowIso();
+      }
+    });
+}
+
 function getLossAndStoppedRows(state = appState) {
-  return state.stores.map((store) => {
+  return getVisibleStores(state, currentUser).map((store) => {
     const qty = getStoreStock(store.id, state);
     const total = sumQty(qty);
     const lastReceipt = state.movements.receipts.filter((item) => isActiveMovement(item) && item.storeId === store.id).sort((a, b) => b.date.localeCompare(a.date))[0];
@@ -5509,19 +5760,26 @@ function renderDashboard() {
   const metrics = getTodayMetrics();
   const forecast = getForecast();
   const alerts = getAllAlerts().slice(0, 4);
-  const openDivergences = appState.divergences.filter((item) => item.status === 'aberta').length;
+  const visibleDivergences = getVisibleDivergences(appState, currentUser);
+  const openDivergences = visibleDivergences.filter((item) => item.status === 'aberta').length;
   const stockRows = getStoreStockRows().slice(0, 5);
-  const routeSummary = appState.routes.map((route) => {
-    const sent = appState.movements.outbounds.filter((item) => item.date === todayStr() && item.routeId === route.id && item.status !== 'historico').reduce((acc, item) => acc + sumQty(item.qty), 0);
-    const pickup = appState.movements.pickups.filter((item) => item.date === todayStr() && item.routeId === route.id).reduce((acc, item) => acc + sumQty(item.qty), 0);
-    const returned = appState.movements.returns.filter((item) => item.date === todayStr() && item.routeId === route.id).reduce((acc, item) => acc + sumQty(item.qty), 0);
+  const routesForDashboard = canSeeGlobalData(currentUser) || currentUser.role === 'cd' ? appState.routes : getVisibleRoutes(appState, currentUser);
+  const showCdForecast = ['admin', 'viewer', 'cd'].includes(currentUser?.role);
+  const visibleStoreQty = getVisibleStores(appState, currentUser).reduce((acc, store) => addQty(acc, getStoreStock(store.id)), emptyQty());
+  const dashboardCategoryQty = showCdForecast ? appState.cdStock : visibleStoreQty;
+  const dashboardCategoryTotal = Math.max(1, sumQty(dashboardCategoryQty));
+  const routeSummary = routesForDashboard.map((route) => {
+    const sent = appState.movements.outbounds.filter((item) => item.date === todayStr() && item.routeId === route.id && item.status !== 'historico' && isMovementVisibleToUser(item, currentUser, appState)).reduce((acc, item) => acc + sumQty(item.qty), 0);
+    const pickup = appState.movements.pickups.filter((item) => item.date === todayStr() && item.routeId === route.id && isMovementVisibleToUser(item, currentUser, appState)).reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
+    const returned = appState.movements.returns.filter((item) => item.date === todayStr() && item.routeId === route.id && isMovementVisibleToUser(item, currentUser, appState)).reduce((acc, item) => acc + sumQty(item.qty), 0);
     const diff = pickup - returned;
     return { route, sent, pickup, returned, diff };
   });
 
   return `
     <div class="stack">
-      ${metrics.company < forecast.predicted ? `
+      ${renderMandatoryInventoryNotice(todayStr())}
+      ${showCdForecast ? (metrics.company < forecast.predicted ? `
         <div class="alert-strip critical">
           <div>
             <strong>ALERTA DE ESTOQUE CRÍTICO</strong>
@@ -5537,17 +5795,24 @@ function renderDashboard() {
           </div>
           ${statusTag(metrics.company < forecast.predicted + appState.settings.safetyMargin ? 'warn' : 'ok')}
         </div>
+      `) : `
+        <div class="alert-strip info">
+          <div>
+            <strong>Visão do seu acesso</strong>
+            <div class="muted">Esta tela mostra somente as informações vinculadas ao seu usuário.</div>
+          </div>
+        </div>
       `}
 
       <div class="cards-grid">
-        ${renderMetricCard('Caixas na Empresa', metrics.company, '🏭', metrics.company < forecast.predicted ? 'critical' : 'success', 'Saldo atual confirmado no CD')}
+        ${showCdForecast ? renderMetricCard('Caixas na Empresa', metrics.company, '🏭', metrics.company < forecast.predicted ? 'critical' : 'success', 'Saldo atual confirmado no CD') : ''}
         ${renderMetricCard('Enviadas Hoje', metrics.sent, '🚚', 'success', 'Saídas lançadas pelo CD')}
         ${renderMetricCard('Confirmadas nas Lojas', metrics.confirmed, '🏬', 'success', 'Recebimentos confirmados pelos promotores')}
-        ${renderMetricCard('Estoque em Loja', metrics.stores, '📦', 'warning', 'Saldo acumulado em todas as lojas')}
+        ${renderMetricCard(currentUser.role === 'promoter' ? 'Estoque da Minha Loja' : 'Estoque Visível', metrics.stores, '📦', 'warning', 'Saldo dentro da permissão do usuário')}
         ${renderMetricCard('Em Retorno', metrics.inReturn, '🔄', 'warning', 'Caixas recolhidas ainda não recebidas no CD')}
         ${renderMetricCard('Recebidas Hoje', metrics.returns, '✅', 'success', 'Caixas que retornaram ao CD')}
         ${renderMetricCard('Divergências Abertas', openDivergences, '⚠️', openDivergences ? 'critical' : 'success', 'Erros identificados automaticamente')}
-        ${renderMetricCard('Base do Dia', forecast.predicted, '📊', 'success', `${forecast.source} de necessidade para ${weekdayName(forecast.weekday)}`)}
+        ${showCdForecast ? renderMetricCard('Base do Dia', forecast.predicted, '📊', 'success', `${forecast.source} de necessidade para ${weekdayName(forecast.weekday)}`) : ''}
       </div>
 
       <div class="grid-3">
@@ -5555,13 +5820,13 @@ function renderDashboard() {
           <div class="section-header">
             <div>
               <h3>Saldos por Categoria de Caixa</h3>
-              <p>Saldo atual confirmado na empresa por folhagens e bandejas.</p>
+              <p>${showCdForecast ? 'Saldo atual confirmado no CD por folhagens e bandejas.' : 'Saldo visível para seu acesso por folhagens e bandejas.'}</p>
             </div>
           </div>
           <div class="list">
             ${BOX_TYPES.map((item) => {
-              const value = safeInt(appState.cdStock[item.key]);
-              const total = Math.max(1, metrics.company);
+              const value = safeInt(dashboardCategoryQty[item.key]);
+              const total = dashboardCategoryTotal;
               return `
                 <div class="kpi-line">
                   <div class="kpi-row"><span>${item.label}</span><strong>${value}</strong></div>
@@ -5658,12 +5923,11 @@ function renderDashboard() {
           <div class="section-header">
             <div>
               <h3>Últimas Ações</h3>
-              <p>Auditoria por usuário, data e hora.</p>
             </div>
           </div>
-          ${appState.audit.length ? `
+          ${appState.audit.filter((item) => canSeeGlobalData(currentUser) || currentUser.role === 'cd' || item.userId === currentUser.id || item.userName === currentUser.name).length ? `
             <div class="list">
-              ${appState.audit.slice(0, 6).map((item) => `
+              ${appState.audit.filter((item) => canSeeGlobalData(currentUser) || currentUser.role === 'cd' || item.userId === currentUser.id || item.userName === currentUser.name).slice(0, 6).map((item) => `
                 <div class="list-item">
                   <div class="list-item-head">
                     <strong>${item.action}</strong>
@@ -5704,7 +5968,6 @@ function renderSaidas() {
         <div class="page-header">
           <div>
             <h3>Nova saída do CD</h3>
-            <p>Selecione somente a loja. O sistema identifica automaticamente a rota e o motorista cadastrados para a data da entrega.</p>
           </div>
           <div class="helper-card">
             <h4>Saldo atual do CD</h4>
@@ -5725,17 +5988,8 @@ function renderSaidas() {
             </label>
           </div>
 
-          <div id="saida-rota-info" class="helper-card small">
-            Selecione uma loja para o sistema preencher automaticamente a rota e o motorista.
-          </div>
+          <div id="saida-rota-info" class="helper-card compact small">Selecione uma loja.</div>
 
-          ${currentUser.role === 'admin' ? `
-            <div class="helper-card small">
-              <strong>Correção de rota:</strong> se a loja estiver em rota errada, acesse <strong>Rotas e Motoristas</strong> no ADM e altere a rota fixa, rota de domingo ou crie uma troca temporária por data.
-            </div>
-          ` : ''}
-
-          <div class="helper-card small"><strong>Lançamento separado:</strong> informe as caixas de folhagens e as caixas de bandejas. O sistema soma as duas categorias no total da loja.</div>
 
           ${qtyInputs('saida')}
 
@@ -5750,7 +6004,6 @@ function renderSaidas() {
         <div class="section-header">
           <div>
             <h3>Saídas recentes</h3>
-            <p>Últimos lançamentos feitos pelo CD.</p>
           </div>
         </div>
         <div class="table-wrap">
@@ -5792,17 +6045,13 @@ function renderEntregasMotorista() {
     }
     return true;
   }).slice(0, 80);
-  const recent = (appState.movements.driverDeliveries || []).filter(isActiveMovement).slice(0, 12);
+  const recent = (appState.movements.driverDeliveries || []).filter((item) => isActiveMovement(item) && isMovementVisibleToUser(item, currentUser, appState)).slice(0, 12);
   return `
     <div class="grid-2">
       <div class="card">
         <div class="page-header">
           <div>
             <h3>Validar caixas deixadas na loja</h3>
-            <p>O motorista informa primeiro somente o total. Se o total não bater, o sistema obriga o detalhamento de folhagens e bandejas.</p>
-          </div>
-          <div class="helper-card small">
-            <strong>Regra:</strong> se era 20 caixas e o motorista informar 21 ou 18, o sistema mostra a divergência imediatamente e exige a separação.
           </div>
         </div>
 
@@ -5817,9 +6066,7 @@ function renderEntregasMotorista() {
             </select>
           </label>
 
-          <div id="entrega-motorista-resumo" class="helper-card small">
-            Selecione uma saída e informe o total deixado. O sistema não mostra a quantidade prevista antes da conferência.
-          </div>
+          <div id="entrega-motorista-resumo" class="helper-card compact small">Selecione uma saída.</div>
 
           <label>Total de caixas deixadas na loja
             <input type="number" min="0" step="1" name="totalDelivered" id="entrega-motorista-total" required />
@@ -5849,7 +6096,6 @@ function renderEntregasMotorista() {
         <div class="section-header">
           <div>
             <h3>Validações recentes</h3>
-            <p>Entregas já confirmadas pelo motorista.</p>
           </div>
         </div>
         <div class="list">
@@ -5882,11 +6128,6 @@ function renderRecebimentos() {
         <div class="page-header">
           <div>
             <h3>Confirmar recebimento na loja</h3>
-            <p>O promotor confirma obrigatoriamente separado: caixas de folhagens e caixas de bandejas. Lojas Bretas não aparecem aqui, pois são validadas somente pelo motorista.</p>
-          </div>
-          <div class="helper-card">
-            <h4>Regra automática</h4>
-            <p class="small">Se a quantidade recebida for diferente da saída do CD, uma divergência é aberta automaticamente.</p>
           </div>
         </div>
 
@@ -5902,11 +6143,8 @@ function renderRecebimentos() {
             </select>
           </label>
 
-          <div id="recebimento-resumo" class="helper-card small">
-            Selecione a saída e informe o que realmente chegou. O sistema não mostra a quantidade enviada antes da conferência.
-          </div>
+          <div id="recebimento-resumo" class="helper-card compact small">Selecione a saída.</div>
 
-          <div class="helper-card small"><strong>Conferência separada:</strong> informe quantas caixas de folhagens e quantas de bandejas realmente chegaram. Se houver erro, a divergência mostrará o total e a diferença por categoria.</div>
 
           ${qtyInputs('recebimento')}
 
@@ -5924,11 +6162,10 @@ function renderRecebimentos() {
         <div class="section-header">
           <div>
             <h3>Confirmações do dia</h3>
-            <p>Recebimentos já validados pelos promotores.</p>
           </div>
         </div>
         <div class="list">
-          ${appState.movements.receipts.filter((item) => item.date === todayStr()).length ? appState.movements.receipts.filter((item) => item.date === todayStr()).map((item) => {
+          ${appState.movements.receipts.filter((item) => item.date === todayStr() && isMovementVisibleToUser(item, currentUser, appState)).length ? appState.movements.receipts.filter((item) => item.date === todayStr() && isMovementVisibleToUser(item, currentUser, appState)).map((item) => {
             const outbound = appState.movements.outbounds.find((out) => out.id === item.outboundId);
             return `
               <div class="list-item">
@@ -5959,11 +6196,6 @@ function renderRecolhimentos() {
         <div class="page-header">
           <div>
             <h3>Registrar recolhimento</h3>
-            <p>O motorista informa apenas o total de caixas vazias recolhidas. O sistema bloqueia qualquer excesso acima do saldo total da loja.</p>
-          </div>
-          <div class="helper-card">
-            <h4>Transparência total</h4>
-            <p class="small">Toda ação é registrada com usuário, data e hora para facilitar auditoria e justificativas.</p>
           </div>
         </div>
 
@@ -5995,11 +6227,8 @@ function renderRecolhimentos() {
             </select>
           </label>
 
-          <div id="pickup-stock-info" class="helper-card small">
-            Selecione a loja para visualizar o saldo total disponível para recolhimento.
-          </div>
+          <div id="pickup-stock-info" class="helper-card compact small">Selecione a loja.</div>
 
-          <div class="helper-card small"><strong>Recolhimento total:</strong> como as caixas estão vazias, informe somente o total recolhido. Não é necessário separar folhagens e bandejas.</div>
 
           <div class="qty-grid single">
             <div class="qty-box">
@@ -6022,7 +6251,6 @@ function renderRecolhimentos() {
         <div class="section-header">
           <div>
             <h3>Recolhimentos do dia</h3>
-            <p>O que já saiu das lojas e está em retorno para o CD.</p>
           </div>
         </div>
         <div class="table-wrap">
@@ -6036,7 +6264,7 @@ function renderRecolhimentos() {
               </tr>
             </thead>
             <tbody>
-              ${appState.movements.pickups.filter((item) => item.date === todayStr()).length ? appState.movements.pickups.filter((item) => item.date === todayStr()).map((item) => `
+              ${appState.movements.pickups.filter((item) => item.date === todayStr() && isMovementVisibleToUser(item, currentUser, appState)).length ? appState.movements.pickups.filter((item) => item.date === todayStr() && isMovementVisibleToUser(item, currentUser, appState)).map((item) => `
                 <tr>
                   <td>${getStoreById(item.storeId)?.name || '-'}</td>
                   <td>${getRouteById(item.routeId)?.name || '-'}</td>
@@ -6061,11 +6289,6 @@ function renderRetornos() {
         <div class="page-header">
           <div>
             <h3>Confirmar retorno no CD</h3>
-            <p>O CD confirma somente o total recebido por rota e motorista. O sistema compara automaticamente com o que o motorista lançou nas lojas.</p>
-          </div>
-          <div class="helper-card">
-            <h4>Regra do retorno</h4>
-            <p class="small">Se o motorista disser que recolheu 300 e o CD confirmar 292, a divergência será aberta e ficará registrada.</p>
           </div>
         </div>
 
@@ -6088,11 +6311,8 @@ function renderRetornos() {
             </label>
           </div>
 
-          <div id="retorno-resumo" class="helper-card small">
-            Selecione rota e motorista para ver o total recolhido nas lojas e ainda pendente de conferência no CD.
-          </div>
+          <div id="retorno-resumo" class="helper-card compact small">Selecione rota e motorista.</div>
 
-          <div class="helper-card small"><strong>Retorno separado:</strong> confira folhagens e bandejas recebidas no CD. Se o total divergir do motorista, o responsável deverá justificar.</div>
 
           ${qtyInputs('retorno')}
 
@@ -6110,7 +6330,6 @@ function renderRetornos() {
         <div class="section-header">
           <div>
             <h3>Retornos já lançados</h3>
-            <p>Conferências recentes do CD.</p>
           </div>
         </div>
         <div class="list">
@@ -6139,7 +6358,6 @@ function renderEstoque() {
         <div class="page-header">
           <div>
             <h3>Estoque em loja</h3>
-            <p>O saldo de cada loja considera automaticamente o que sobrou do dia anterior mais o que entrou hoje menos o que foi recolhido.</p>
           </div>
           <div class="inline-actions">
             ${statusTag(rows.some((row) => row.isHigh) ? 'warn' : 'ok')}
@@ -6202,44 +6420,56 @@ function renderInventario() {
   const inventoryDivergences = appState.divergences.filter((item) => item.type === 'inventario_cd' || item.type === 'inventario_loja');
 
   if (!isAdmin) {
-    const store = getStoreById(currentUser.storeId);
-    const currentQty = getStoreStock(currentUser.storeId);
-    const userHistory = history.filter((item) => item.storeId === currentUser.storeId).slice(0, 6);
+    const visibleStores = currentUser.role === 'promoter'
+      ? [getStoreById(currentUser.storeId)].filter(Boolean)
+      : getVisibleStores(appState, currentUser, todayStr());
+    const firstStore = visibleStores[0] || null;
+    const currentQty = firstStore ? getStoreStock(firstStore.id) : emptyQty();
+    const userHistory = history
+      .filter((item) => currentUser.role === 'promoter' ? item.storeId === currentUser.storeId : visibleStores.some((store) => store.id === item.storeId))
+      .slice(0, 6);
 
     return `
       <div class="stack">
+        ${renderMandatoryInventoryNotice(todayStr())}
         <div class="card">
           <div class="page-header">
             <div>
               <h3>Inventário da loja</h3>
-              <p>Informe a quantidade física de caixas que existe na sua loja. O sistema vai atualizar o saldo da loja com essa contagem.</p>
             </div>
-            <div class="helper-card small">
-              <strong>${store?.name || 'Loja vinculada'}</strong><br>
+            <div id="inventario-promotor-current" class="helper-card small">
+              <strong>${firstStore?.name || 'Loja vinculada'}</strong><br>
               Saldo atual no sistema: <strong>${sumQty(currentQty)}</strong> caixas
             </div>
           </div>
 
-          <form id="form-inventario-promotor" class="stack">
-            <input type="hidden" name="storeId" value="${currentUser.storeId || ''}" />
-            <label>Data do inventário
-              <input type="date" name="date" value="${todayStr()}" required />
-            </label>
-            ${qtyInputs('inventario-promotor', currentQty)}
-            <label>Observação
-              <textarea name="notes" placeholder="Exemplo: contagem física realizada no fechamento da loja."></textarea>
-            </label>
-            <div class="form-actions">
-              <button type="submit" class="btn btn-primary">Salvar inventário da loja</button>
-            </div>
-          </form>
+          ${visibleStores.length ? `
+            <form id="form-inventario-promotor" class="stack">
+              ${currentUser.role === 'promoter' ? `<input type="hidden" name="storeId" value="${currentUser.storeId || ''}" />` : `
+                <label>Loja
+                  <select name="storeId" id="inventario-promotor-store" required>
+                    ${visibleStores.map((store) => `<option value="${store.id}">${store.name}</option>`).join('')}
+                  </select>
+                </label>
+              `}
+              <label>Data do inventário
+                <input type="date" name="date" value="${todayStr()}" readonly required />
+              </label>
+              ${qtyInputs('inventario-promotor', currentQty)}
+              <label>Observação
+                <textarea name="notes" placeholder="Exemplo: contagem física realizada no fechamento da loja."></textarea>
+              </label>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Salvar inventário da loja</button>
+              </div>
+            </form>
+          ` : `<div class="empty">Nenhuma loja vinculada ao seu acesso para inventário.</div>`}
         </div>
 
         <div class="card">
           <div class="section-header">
             <div>
-              <h3>Últimos inventários da minha loja</h3>
-              <p>Histórico dos lançamentos feitos para esta loja.</p>
+              <h3>Últimos inventários</h3>
             </div>
           </div>
           ${userHistory.length ? `
@@ -6247,7 +6477,7 @@ function renderInventario() {
               ${userHistory.map((item) => `
                 <div class="list-item">
                   <div class="list-item-head">
-                    <strong>${formatDateBR(item.date)} • ${sumQty(item.countedQty)} caixas</strong>
+                    <strong>${formatDateBR(item.date)} • ${getStoreById(item.storeId)?.name || 'Loja'} • ${sumQty(item.countedQty)} caixas</strong>
                     ${item.hasDivergence ? statusTag('warn') : statusTag('ok')}
                   </div>
                   <small class="muted">Lançado por ${item.createdBy} em ${formatDateTimeBR(item.createdAt)}</small>
@@ -6262,12 +6492,70 @@ function renderInventario() {
 
   return `
     <div class="stack">
+      ${renderMandatoryInventoryNotice(todayStr())}
+      <div class="card">
+        <div class="section-header">
+          <div>
+            <h3>Programar inventário obrigatório em loja</h3>
+            <p>O usuário verá o aviso na data programada até concluir o inventário.</p>
+          </div>
+          <div class="badge-count">${pendingMandatory.length}</div>
+        </div>
+        <form id="form-programar-inventario" class="stack">
+          <div class="form-grid-3">
+            <label>Data programada
+              <input type="date" name="date" value="${todayStr()}" min="${todayStr()}" required />
+            </label>
+            <label>Abrangência
+              <select name="scope" id="mandatory-inventory-scope">
+                <option value="all">Todas as lojas</option>
+                <option value="network">Por rede</option>
+                <option value="store">Loja específica</option>
+              </select>
+            </label>
+            <label>Rede
+              <select name="network" id="mandatory-inventory-network">
+                <option value="">Selecione</option>
+                ${uniqueNetworks().map((network) => `<option value="${escapeHtml(network)}">${escapeHtml(network)}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+          <div class="form-grid">
+            <label>Loja específica
+              <select name="storeId" id="mandatory-inventory-store">
+                <option value="">Selecione</option>
+                ${appState.stores.map((store) => `<option value="${store.id}">${store.name}</option>`).join('')}
+              </select>
+            </label>
+            <label>Observação
+              <input type="text" name="notes" placeholder="Ex.: inventário geral obrigatório" />
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Programar inventário</button>
+          </div>
+        </form>
+        ${mandatoryHistory.length ? `
+          <div class="table-wrap compact-table mandatory-inventory-history">
+            <table>
+              <thead><tr><th>Data</th><th>Escopo</th><th>Lojas</th><th>Concluídas</th><th>Status</th></tr></thead>
+              <tbody>
+                ${mandatoryHistory.map((item) => {
+                  const total = getMandatoryInventoryStoreIds(item).length;
+                  const done = Array.isArray(item.completedStoreIds) ? item.completedStoreIds.length : 0;
+                  return `<tr><td>${formatDateBR(item.date)}</td><td>${item.scope === 'network' ? item.network : item.scope === 'store' ? 'Loja específica' : 'Todas as lojas'}</td><td>${total}</td><td>${done}</td><td>${item.status === 'concluida' ? statusTag('ok') : statusTag('warn')}</td></tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : ''}
+      </div>
+
       <div class="grid-2">
         <div class="card">
           <div class="page-header">
             <div>
               <h3>Inventário do CD</h3>
-              <p>Corrige oficialmente o saldo físico de caixas dentro da empresa/CD.</p>
             </div>
             <div class="helper-card small">
               Saldo atual no CD: <strong>${sumQty(appState.cdStock)}</strong> caixas<br>
@@ -6277,7 +6565,7 @@ function renderInventario() {
 
           <form id="form-inventario-cd" class="stack">
             <label>Data do inventário
-              <input type="date" name="date" value="${todayStr()}" required />
+              <input type="date" name="date" value="${todayStr()}" readonly required />
             </label>
             ${qtyInputs('inventario-cd', appState.cdStock)}
             <label>Observação / motivo do ajuste
@@ -6293,7 +6581,6 @@ function renderInventario() {
           <div class="page-header">
             <div>
               <h3>Inventário por loja</h3>
-              <p>Corrige o saldo físico de uma loja específica após contagem em loja.</p>
             </div>
           </div>
 
@@ -6326,7 +6613,6 @@ function renderInventario() {
           <div class="section-header">
             <div>
               <h3>Divergências de inventário</h3>
-              <p>Diferenças entre o saldo do sistema e a contagem física. Área exclusiva do ADM.</p>
             </div>
             <div class="badge-count">${inventoryDivergences.filter((item) => item.status === 'aberta').length}</div>
           </div>
@@ -6361,7 +6647,6 @@ function renderInventario() {
           <div class="section-header">
             <div>
               <h3>Histórico de inventários</h3>
-              <p>Últimas correções oficiais de saldo.</p>
             </div>
           </div>
           <div class="table-wrap">
@@ -6397,9 +6682,7 @@ function renderInventario() {
 }
 
 function renderDivergencias() {
-  const visibleDivergences = currentUser.role === 'driver'
-    ? appState.divergences.filter((item) => item.driverId === currentUser.id || item.responsibleUserId === currentUser.id)
-    : appState.divergences;
+  const visibleDivergences = getVisibleDivergences(appState, currentUser);
   const open = visibleDivergences.filter((item) => item.status === 'aberta');
   const resolved = visibleDivergences.filter((item) => item.status === 'resolvida');
   return `
@@ -6408,7 +6691,6 @@ function renderDivergencias() {
         <div class="section-header">
           <div>
             <h3>Divergências em aberto</h3>
-            <p>Clique em <strong>Ver erro detalhado</strong>. Quando houver responsável, a divergência só pode ser resolvida depois da justificativa.</p>
           </div>
           <div class="badge-count">${open.length}</div>
         </div>
@@ -6439,7 +6721,6 @@ function renderDivergencias() {
         <div class="section-header">
           <div>
             <h3>Histórico resolvido</h3>
-            <p>Ocorrências já tratadas pela gestão.</p>
           </div>
         </div>
         ${resolved.length ? `
@@ -6472,7 +6753,6 @@ function renderAlertas() {
         <div class="page-header">
           <div>
             <h3>Alertas automáticos</h3>
-            <p>O sistema monitora estoque crítico no CD, lojas com excesso de caixas e divergências abertas.</p>
           </div>
           <div class="helper-card small">Total de alertas: <strong>${alerts.length}</strong></div>
         </div>
@@ -6508,7 +6788,6 @@ function renderFechamento() {
         <div class="page-header">
           <div>
             <h3>Fechamento diário da operação</h3>
-            <p>Conferência oficial do dia: saídas, validações, recebimentos, recolhimentos, retornos e pendências.</p>
           </div>
           <div class="helper-card small">
             ${closing ? `<strong>Último fechamento:</strong><br>${formatDateTimeBR(closing.closedAt)} por ${closing.closedBy}` : '<strong>Status:</strong><br>Dia ainda não fechado.'}
@@ -6545,7 +6824,6 @@ function renderFechamento() {
         <div class="section-header">
           <div>
             <h3>Status por loja no dia</h3>
-            <p>Mostra onde a operação parou: CD, motorista, promotor, recolhimento, retorno ou divergência.</p>
           </div>
         </div>
         <div class="table-wrap">
@@ -6585,7 +6863,6 @@ function renderPendencias() {
         <div class="page-header">
           <div>
             <h3>Pendências por responsável</h3>
-            <p>Lista prática do que precisa ser finalizado antes do fechamento diário.</p>
           </div>
           <div class="helper-card small">Total visível para seu acesso: <strong>${pendencies.length}</strong></div>
         </div>
@@ -6630,7 +6907,6 @@ function renderEstornos() {
         <div class="page-header">
           <div>
             <h3>Estorno com auditoria</h3>
-            <p>Cancele lançamentos errados sem apagar histórico. O sistema registra usuário, data, hora e motivo.</p>
           </div>
           <div class="helper-card small"><strong>Atenção:</strong> para saída com recebimento/validação, estorne primeiro os movimentos vinculados.</div>
         </div>
@@ -6756,11 +7032,8 @@ function renderRotas() {
         <div class="section-header">
           <div>
             <h3>Mapa atual de rotas</h3>
-            <p>Selecione o motorista para visualizar, de forma prática, quais rotas e lojas estão vinculadas a ele hoje.</p>
           </div>
-          <div class="helper-card small">
-            Motoristas: <strong>${drivers.length}</strong> • Rotas: <strong>${appState.routes.length}</strong> • Lojas: <strong>${appState.stores.length}</strong>
-          </div>
+          <div class="helper-card compact small">Motoristas: <strong>${drivers.length}</strong> • Rotas: <strong>${appState.routes.length}</strong> • Lojas: <strong>${appState.stores.length}</strong></div>
         </div>
 
         <div class="form-grid route-map-filter">
@@ -6770,10 +7043,6 @@ function renderRotas() {
               ${drivers.map((driver) => `<option value="${driver.id}">${driver.name}</option>`).join('')}
             </select>
           </label>
-          <div class="helper-card small">
-            <strong>Como usar</strong><br>
-            Primeiro confira o mapa do motorista. Depois, use os cards abaixo para mover lojas, alterar o motorista da rota ou criar exceção temporária.
-          </div>
         </div>
 
         <div id="mapa-rotas-motorista-result" class="route-map-panel">
@@ -6784,7 +7053,6 @@ function renderRotas() {
       <div class="section-header route-change-title">
         <div>
           <h3>Alterações de rota</h3>
-          <p>Depois de conferir o mapa acima, faça as correções necessárias nas lojas, motoristas ou exceções temporárias.</p>
         </div>
       </div>
 
@@ -6793,10 +7061,6 @@ function renderRotas() {
           <div class="page-header">
             <div>
               <h3>Mudar loja de rota</h3>
-              <p>Use para corrigir a rota fixa da loja, alterar a rota de domingo ou ajustar uma loja que foi cadastrada em rota errada.</p>
-            </div>
-            <div class="helper-card small">
-              A saída do CD usa esta rota automaticamente ao selecionar a loja.
             </div>
           </div>
 
@@ -6853,10 +7117,6 @@ function renderRotas() {
           <div class="page-header">
             <div>
               <h3>Alterar motorista responsável pela rota</h3>
-              <p>Use quando a rota continuar a mesma, mas o motorista responsável mudar.</p>
-            </div>
-            <div class="helper-card small">
-              Essa alteração passa a valer para os próximos lançamentos.
             </div>
           </div>
 
@@ -6891,11 +7151,6 @@ function renderRotas() {
           <div class="page-header">
             <div>
               <h3>Troca temporária de rota</h3>
-              <p>A rota padrão da loja não é alterada. A exceção vale apenas para a data informada.</p>
-            </div>
-            <div class="helper-card">
-              <h4>Regra-chave</h4>
-              <p class="small">O saldo das caixas pertence à loja. A rota pode mudar temporariamente sem perder o histórico.</p>
             </div>
           </div>
 
@@ -6948,7 +7203,6 @@ function renderRotas() {
           <div class="section-header">
             <div>
               <h3>Exceções do dia</h3>
-              <p>Lojas que estão operando fora da rota padrão hoje.</p>
             </div>
           </div>
           ${exceptionsToday.length ? `
@@ -6982,7 +7236,6 @@ function renderLojas() {
         <div class="page-header">
           <div>
             <h3>Lojas cadastradas</h3>
-            <p>Resumo de todas as lojas, com filtro por rede e vínculo com rota/motorista.</p>
           </div>
           <div class="helper-card small">
             Total de lojas: <strong>${appState.stores.length}</strong> • Redes: <strong>${networks.length}</strong>
@@ -7039,7 +7292,6 @@ function renderLojas() {
         <div class="page-header">
           <div>
             <h3>Cadastrar nova loja</h3>
-            <p>Cadastre a loja já vinculando à rota/motorista. Para Bretas, o sistema marca automaticamente como sem promotor.</p>
           </div>
         </div>
         <form id="form-nova-loja" class="stack">
@@ -7086,7 +7338,6 @@ function renderCargaGoiania() {
         <div class="page-header">
           <div>
             <h3>Validação da carga total de Goiânia</h3>
-            <p>Vinicius/Sebastião validam a soma total do caminhão antes de seguir para Goiânia.</p>
           </div>
           <div class="helper-card small">
             Caminhão compartilhado: <strong>Vinicius / Sebastião</strong> • Escala 12x36
@@ -7165,7 +7416,6 @@ function renderDistribuicaoGoiania() {
         <div class="page-header">
           <div>
             <h3>Distribuição / transbordo Goiânia</h3>
-            <p>Registre para quem Vinicius/Sebastião repassaram cada parte da carga: Maycon, Alexsandro, Edmar, Vinicius ou reforço.</p>
           </div>
           <div class="helper-card small">
             Edmar: Itumbiara e Rio Verde. Vinicius também pode receber lojas para entrega direta.
@@ -7221,6 +7471,7 @@ function renderDistribuicaoGoiania() {
 }
 
 function renderRelatorios() {
+  if (currentUser.role !== 'admin') return `<div class="empty">Acesso restrito ao ADM.</div>`;
   const storeRows = getStoreStockRows();
   const topUsers = {};
   const lossRows = getLossAndStoppedRows().slice(0, 12);
@@ -7284,7 +7535,6 @@ function renderRelatorios() {
         <div class="section-header">
           <div>
             <h3>Caixas paradas / risco de perda</h3>
-            <p>Lojas com saldo alto, muitos dias sem movimentação ou divergência aberta.</p>
           </div>
         </div>
         <div class="table-wrap">
@@ -7310,7 +7560,6 @@ function renderRelatorios() {
         <div class="section-header">
           <div>
             <h3>Auditoria completa</h3>
-            <p>Todas as ações realizadas dentro do sistema.</p>
           </div>
         </div>
         <div class="table-wrap">
@@ -7365,10 +7614,27 @@ function renderUsuarios() {
       <div class="card">
         <div class="page-header">
           <div>
-            <h3>Criar novo usuário</h3>
-            <p>Cadastre novos acessos. A senha inicial deverá ser alterada no primeiro login.</p>
+            <h3>Permissões por perfil</h3>
           </div>
-          <div class="helper-card small">Use login sem underline. Exemplo: <strong>motorvinicius</strong>.</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Perfil</th><th>O que visualiza</th></tr></thead>
+            <tbody>
+              <tr><td>ADM</td><td>Todas as abas, usuários, configurações e dados gerais.</td></tr>
+              <tr><td>CD</td><td>Somente saídas, retornos, pendências e Dashboard do CD.</td></tr>
+              <tr><td>Motorista</td><td>Somente entregas, recolhimentos, divergências e pendências da rota vinculada.</td></tr>
+              <tr><td>Promotor</td><td>Somente recebimento, estoque, inventário e pendências da própria loja.</td></tr>
+              <tr><td>Visualizador</td><td>Visão gerencial concentrada na Dashboard.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="page-header">
+          <div>
+            <h3>Criar novo usuário</h3>
+          </div>
         </div>
 
         <form id="form-novo-usuario" class="stack">
@@ -7412,9 +7678,7 @@ function renderUsuarios() {
         <div class="page-header">
           <div>
             <h3>Usuários cadastrados</h3>
-            <p>Edite nome, perfil, loja/rota vinculada, login e consulte a senha atual.</p>
           </div>
-          <div class="helper-card small">Para motoristas, clique em <strong>rota vinculada</strong> e selecione qualquer rota disponível.</div>
         </div>
         <div class="table-wrap users-table-wrap">
           <table class="users-admin-table">
@@ -7426,6 +7690,7 @@ function renderUsuarios() {
                 <th>Usuário de login</th>
                 <th>Senha atual</th>
                 <th>Status</th>
+                <th>Permissão</th>
                 <th>Ação</th>
               </tr>
             </thead>
@@ -7456,6 +7721,7 @@ function renderUsuarios() {
                   </td>
                   <td data-label="Senha atual"><strong>${escapeHtml(user.password)}</strong></td>
                   <td data-label="Status">${mustChangePassword(user) ? '<span class="tag warn">Primeiro acesso pendente</span>' : '<span class="tag ok">Senha alterada</span>'}</td>
+                  <td data-label="Permissão"><small class="muted">${getPermissionLabel(user)}</small></td>
                   <td data-label="Ação"><button type="button" class="btn btn-secondary btn-save-user" data-user-id="${user.id}">Salvar alterações</button></td>
                 </tr>
               `).join('')}
@@ -7474,7 +7740,6 @@ function renderConfiguracoes() {
         <div class="page-header">
           <div>
             <h3>Parâmetros do sistema</h3>
-            <p>Defina margem de segurança, base manual por dia da semana e limite de caixas por loja.</p>
           </div>
         </div>
 
@@ -7518,6 +7783,12 @@ function renderConfiguracoes() {
 }
 
 function bindViewEvents() {
+  document.querySelectorAll('.btn-go-inventory').forEach((button) => {
+    button.addEventListener('click', () => {
+      currentView = 'inventario';
+      render();
+    });
+  });
   if (currentView === 'saidas') bindSaidasEvents();
   if (currentView === 'entregasMotorista') bindEntregasMotoristaEvents();
   if (currentView === 'recebimentos') bindRecebimentosEvents();
@@ -7576,7 +7847,7 @@ function bindSaidasEvents() {
     const date = form.querySelector('[name="date"]').value || todayStr();
 
     if (!store) {
-      infoBox.innerHTML = 'Selecione uma loja para o sistema preencher automaticamente a rota e o motorista.';
+      infoBox.innerHTML = 'Selecione uma loja.';
       return;
     }
 
@@ -7592,15 +7863,14 @@ function bindSaidasEvents() {
       infoBox.innerHTML = `
         <strong>${store.name}</strong><br>
         <span class="tag danger">Sem rota cadastrada</span><br>
-        Corrija a rota desta loja no ADM antes de salvar a saída.
+        Sem rota cadastrada.
       `;
       return;
     }
 
     infoBox.innerHTML = `
-      <strong>${store.name}</strong>${store.network ? ` • ${store.network}` : ''}<br>
-      ${routeType}: <strong>${route.name}</strong><br>
-      Motorista: <strong>${driver?.name || 'Sem motorista vinculado'}</strong>
+      <strong>${store.name}</strong><br>
+      Rota: <strong>${route.name}</strong> • Motorista: <strong>${driver?.name || 'Sem motorista'}</strong>
     `;
   };
 
@@ -7674,7 +7944,7 @@ function bindEntregasMotoristaEvents() {
   const refresh = () => {
     const outbound = getSelectedOutbound();
     if (!outbound) {
-      summary.innerHTML = 'Selecione uma saída e informe o total deixado. O sistema não mostra a quantidade prevista antes da conferência.';
+      summary.innerHTML = 'Selecione uma saída.';
       detailPanel.classList.add('hidden');
       return;
     }
@@ -7685,9 +7955,8 @@ function bindEntregasMotoristaEvents() {
 
     if (total <= 0) {
       summary.innerHTML = `
-        <strong>${store?.name || '-'}</strong>${store?.network ? ` • ${store.network}` : ''}<br>
-        Saída do CD em ${formatDateBR(outbound.date)} • Rota ${route?.name || '-'}<br>
-        Informe o total deixado na loja para o sistema conferir. A quantidade prevista fica oculta até a validação.
+        <strong>${store?.name || '-'}</strong><br>
+        Data: ${formatDateBR(outbound.date)} • Rota: ${route?.name || '-'}
       `;
       detailPanel.classList.add('hidden');
       return;
@@ -7761,7 +8030,7 @@ function bindRecebimentosEvents() {
   const updateSummary = () => {
     const outbound = appState.movements.outbounds.find((item) => item.id === outboundSelect.value);
     if (!outbound) {
-      summary.innerHTML = 'Selecione a saída e informe o que realmente chegou. O sistema não mostra a quantidade enviada antes da conferência.';
+      summary.innerHTML = 'Selecione a saída.';
       clearReceiptInputs();
       return;
     }
@@ -7769,9 +8038,8 @@ function bindRecebimentosEvents() {
     clearReceiptInputs();
     const store = getStoreById(outbound.storeId);
     summary.innerHTML = `
-      <strong>${store?.name || '-'}</strong>${store?.network ? ` • ${store.network}` : ''}<br>
-      Saída do CD em ${formatDateBR(outbound.date)} • Rota ${getRouteById(outbound.routeId)?.name || '-'}<br>
-      Informe as caixas recebidas. A quantidade enviada pelo CD só aparecerá após a validação, caso esteja correta ou divergente.
+      <strong>${store?.name || '-'}</strong><br>
+      Data: ${formatDateBR(outbound.date)} • Rota: ${getRouteById(outbound.routeId)?.name || '-'}
     `;
   };
 
@@ -7822,13 +8090,12 @@ function bindRecolhimentosEvents() {
   const refreshStoreInfo = () => {
     const storeId = storeSelect.value;
     if (!storeId) {
-      info.innerHTML = 'Selecione a loja para visualizar o saldo total disponível para recolhimento.';
+      info.innerHTML = 'Selecione a loja.';
       return;
     }
     const qty = getStoreStock(storeId);
     info.innerHTML = `
-      <strong>${getStoreById(storeId)?.name || '-'}</strong><br>
-      Saldo total disponível para recolhimento: <strong>${sumQty(qty)} caixas</strong>
+      <strong>${getStoreById(storeId)?.name || '-'}</strong> • Disponível: <strong>${sumQty(qty)} caixas</strong>
     `;
   };
 
@@ -7865,7 +8132,7 @@ function bindRetornosEvents() {
     const routeId = routeSelect.value;
     const driverId = driverSelect.value;
     if (!routeId || !driverId) {
-      summary.innerHTML = 'Selecione rota e motorista para ver o total recolhido nas lojas e ainda pendente de conferência no CD.';
+      summary.innerHTML = 'Selecione rota e motorista.';
       return;
     }
     const pending = appState.movements.pickups.filter((item) => isActiveMovement(item) && item.date === date && item.routeId === routeId && item.driverId === driverId && !item.returnBatchId);
@@ -8272,13 +8539,29 @@ function bindInventarioEvents() {
     });
   };
 
+  const formMandatory = document.getElementById('form-programar-inventario');
+  if (formMandatory) {
+    formMandatory.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const payload = {
+        date: formMandatory.date.value,
+        scope: formMandatory.scope.value,
+        network: formMandatory.network.value,
+        storeId: formMandatory.storeId.value,
+        notes: formMandatory.notes.value.trim(),
+      };
+      const result = await persistMutation('SCHEDULE_MANDATORY_INVENTORY', payload, 'Inventário obrigatório programado.');
+      if (result.ok) render();
+    });
+  }
+
   const formCd = document.getElementById('form-inventario-cd');
   if (formCd) {
     formCd.addEventListener('submit', async (event) => {
       event.preventDefault();
       const payload = {
         location: 'cd',
-        date: formCd.date.value,
+        date: todayStr(),
         qty: readQtyFromForm(formCd, 'inventario-cd'),
         notes: formCd.notes.value.trim(),
       };
@@ -8313,7 +8596,7 @@ function bindInventarioEvents() {
       event.preventDefault();
       const payload = {
         location: 'store',
-        date: formStore.date.value,
+        date: todayStr(),
         storeId: formStore.storeId.value,
         qty: readQtyFromForm(formStore, 'inventario-loja'),
         notes: formStore.notes.value.trim(),
@@ -8324,12 +8607,28 @@ function bindInventarioEvents() {
   }
 
   const formPromoter = document.getElementById('form-inventario-promotor');
+  const promoterStoreSelect = document.getElementById('inventario-promotor-store');
+  const promoterStoreInfo = document.getElementById('inventario-promotor-current');
+  const refreshPromoterStoreInventory = () => {
+    if (!formPromoter || !promoterStoreInfo) return;
+    const storeId = formPromoter.storeId?.value;
+    if (!storeId) return;
+    const qty = getStoreStock(storeId);
+    promoterStoreInfo.innerHTML = `
+      <strong>${getStoreById(storeId)?.name || '-'}</strong><br>
+      Saldo atual no sistema: <strong>${sumQty(qty)}</strong> caixas<br>
+      ${BOX_TYPES.map((item) => `${item.label}: <strong>${qty[item.key]}</strong>`).join(' • ')}
+    `;
+    fillQtyInputs('inventario-promotor', qty);
+  };
   if (formPromoter) {
+    promoterStoreSelect?.addEventListener('change', refreshPromoterStoreInventory);
+    refreshPromoterStoreInventory();
     formPromoter.addEventListener('submit', async (event) => {
       event.preventDefault();
       const payload = {
         location: 'store',
-        date: formPromoter.date.value,
+        date: todayStr(),
         storeId: formPromoter.storeId.value,
         qty: readQtyFromForm(formPromoter, 'inventario-promotor'),
         notes: formPromoter.notes.value.trim(),
