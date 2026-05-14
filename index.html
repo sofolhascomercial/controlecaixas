@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Só Folhas | Controle de Caixas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="toast" class="toast"></div>
+
+  <section id="login-screen" class="login-screen">
+    <div class="login-card">
+      <img src="logo-sofolhas.png" alt="Logo Só Folhas Hortifruti" class="login-logo" />
+      <h1>Controle de Caixas</h1>
+      <p>Acompanhe estoque, saídas, retornos, divergências e alertas em uma só tela.</p>
+
+      <form id="login-form" class="login-form">
+        <label>
+          Usuário
+          <input type="text" id="login-username" placeholder="Digite seu usuário" required />
+        </label>
+        <label>
+          Senha
+          <input type="password" id="login-password" placeholder="Digite sua senha" required />
+        </label>
+        <button type="submit" class="btn btn-primary btn-block">Entrar</button>
+      </form>
+
+      <div id="password-change-panel" class="password-change-panel hidden">
+        <div class="auth-alert">
+          <strong>Primeiro acesso</strong>
+          <span>Por segurança, altere a senha inicial antes de entrar no sistema.</span>
+        </div>
+        <h2>Alterar senha inicial</h2>
+        <p>Usuário: <strong id="password-change-user-name"></strong></p>
+        <form id="first-password-form" class="login-form">
+          <label>
+            Nova senha
+            <input type="password" id="first-new-password" placeholder="Digite a nova senha" minlength="6" required />
+          </label>
+          <label>
+            Confirmar nova senha
+            <input type="password" id="first-confirm-password" placeholder="Confirme a nova senha" minlength="6" required />
+          </label>
+          <button type="submit" class="btn btn-primary btn-block">Salvar nova senha e entrar</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <div id="app-shell" class="app-shell hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-brand">
+        <img src="logo-sofolhas.png" alt="Logo Só Folhas Hortifruti" class="sidebar-logo" />
+        <button id="sidebar-close" class="icon-btn sidebar-close" title="Ocultar menu">×</button>
+      </div>
+
+      <nav id="sidebar-nav" class="sidebar-nav"></nav>
+
+      <div class="sidebar-footer">
+        <div>
+          <div id="sidebar-user-name" class="sidebar-user-name"></div>
+          <div id="sidebar-user-role" class="sidebar-user-role"></div>
+        </div>
+        <button id="logout-btn" class="icon-btn" title="Sair">↩</button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="menu-toggle" class="icon-btn menu-toggle" title="Abrir menu">☰</button>
+          <div>
+            <h2 id="page-title">Dashboard</h2>
+            <p id="page-subtitle">Visão geral da operação em tempo real</p>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <div class="topbar-date">
+            <span>Hoje</span>
+            <strong id="today-label"></strong>
+          </div>
+          <div class="topbar-user">
+            <span id="topbar-user-name"></span>
+            <small id="topbar-user-role"></small>
+          </div>
+        </div>
+      </header>
+
+      <section id="main-content" class="main-content"></section>
+    </main>
+
+    <nav id="mobile-quick-nav" class="mobile-quick-nav" aria-label="Atalhos rápidos do mobile"></nav>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
