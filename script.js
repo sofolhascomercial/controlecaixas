@@ -5394,6 +5394,35 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     audit('Usuários', 'Usuário atualizado', `${previousSummary} → ${nextSummary}.`);
   }
 
+  if (type === 'DELETE_USERS') {
+    if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode excluir usuários.' };
+
+    const userIds = Array.from(new Set((payload.userIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+    const reason = String(payload.reason || '').trim();
+
+    if (!userIds.length) return { ok: false, error: 'Selecione pelo menos um usuário para excluir.' };
+    if (!reason) return { ok: false, error: 'Informe o motivo da exclusão dos usuários.' };
+    if (userIds.includes(actor.id)) return { ok: false, error: 'Você não pode excluir o usuário que está logado.' };
+
+    const targets = state.users.filter((item) => userIds.includes(item.id));
+    if (!targets.length) return { ok: false, error: 'Nenhum usuário válido foi selecionado.' };
+
+    const remainingAdmins = state.users.filter((item) => item.role === 'admin' && !userIds.includes(item.id));
+    if (!remainingAdmins.length) return { ok: false, error: 'Não é possível excluir todos os usuários ADM.' };
+
+    const targetNames = targets.map((item) => `${item.name} (${item.username})`).join(', ');
+    const deletedIds = new Set(targets.map((item) => item.id));
+
+    state.stores.forEach((store) => {
+      if (store.promoterId && deletedIds.has(store.promoterId)) {
+        store.promoterId = null;
+      }
+    });
+
+    state.users = state.users.filter((item) => !deletedIds.has(item.id));
+    audit('Usuários', 'Usuários excluídos', `${targetNames}. Motivo: ${reason}.`);
+  }
+
   if (type === 'CREATE_STORE') {
     if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode cadastrar lojas.' };
     const name = String(payload.name || '').trim().toUpperCase();
@@ -10196,10 +10225,17 @@ function renderUsuarios() {
             <h3>Usuários cadastrados</h3>
           </div>
         </div>
+        <div class="form-actions" style="margin-bottom:12px">
+          <button type="button" class="btn btn-ghost" id="btn-select-all-users">Selecionar todos</button>
+          <button type="button" class="btn btn-ghost" id="btn-clear-user-selection">Limpar seleção</button>
+          <button type="button" class="btn btn-danger" id="btn-delete-selected-users">Excluir selecionados</button>
+          <span class="muted" id="selected-users-count">0 selecionados</span>
+        </div>
         <div class="table-wrap users-table-wrap">
           <table class="users-admin-table">
             <thead>
               <tr>
+                <th>Selecionar</th>
                 <th>Nome</th>
                 <th>Perfil</th>
                 <th>Loja/Rota vinculada</th>
@@ -10213,6 +10249,9 @@ function renderUsuarios() {
             <tbody>
               ${sortedUsers.map((user) => `
                 <tr data-user-id="${user.id}">
+                  <td data-label="Selecionar">
+                    <input type="checkbox" class="user-delete-check" value="${user.id}" ${user.id === currentUser.id ? 'disabled' : ''} title="${user.id === currentUser.id ? 'Você não pode excluir o usuário logado' : 'Selecionar usuário'}" />
+                  </td>
                   <td data-label="Nome">
                     <input class="user-name-input" type="text" value="${escapeHtml(formatNameForInput(user))}" data-user-id="${user.id}" />
                   </td>
@@ -11114,6 +11153,50 @@ function bindUsuariosEvents() {
       if (result.ok) render();
     });
   });
+
+  const selectedUsersCount = document.getElementById('selected-users-count');
+  const getSelectedUserIds = () => Array.from(document.querySelectorAll('.user-delete-check:checked')).map((item) => item.value);
+  const updateSelectedUsersCount = () => {
+    if (selectedUsersCount) selectedUsersCount.textContent = `${getSelectedUserIds().length} selecionado(s)`;
+  };
+
+  document.querySelectorAll('.user-delete-check').forEach((checkbox) => {
+    checkbox.addEventListener('change', updateSelectedUsersCount);
+  });
+
+  document.getElementById('btn-select-all-users')?.addEventListener('click', () => {
+    document.querySelectorAll('.user-delete-check:not(:disabled)').forEach((checkbox) => {
+      checkbox.checked = true;
+    });
+    updateSelectedUsersCount();
+  });
+
+  document.getElementById('btn-clear-user-selection')?.addEventListener('click', () => {
+    document.querySelectorAll('.user-delete-check').forEach((checkbox) => {
+      checkbox.checked = false;
+    });
+    updateSelectedUsersCount();
+  });
+
+  document.getElementById('btn-delete-selected-users')?.addEventListener('click', async () => {
+    const userIds = getSelectedUserIds();
+    if (!userIds.length) {
+      showToast('Selecione pelo menos um usuário para excluir.', 'error');
+      return;
+    }
+    const names = userIds.map((id) => getUserById(id)?.name || id).join(', ');
+    const confirmed = window.confirm(`Excluir ${userIds.length} usuário(s)?\n${names}\n\nEssa ação remove os acessos selecionados, mas não apaga lançamentos antigos.`);
+    if (!confirmed) return;
+    const reason = window.prompt('Informe o motivo da exclusão:');
+    if (!String(reason || '').trim()) {
+      showToast('Motivo obrigatório para excluir usuários.', 'error');
+      return;
+    }
+    const result = await persistMutation('DELETE_USERS', { userIds, reason }, 'Usuário(s) excluído(s) com sucesso.');
+    if (result.ok) render();
+  });
+
+  updateSelectedUsersCount();
 }
 
 function bindLojasEvents() {
