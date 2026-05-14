@@ -38,6 +38,954 @@ const GOIANIA_TRUNK_ROUTE_ID = 'rota_goiania_vinicius';
 const GOIANIA_TRUNK_DRIVER_IDS = ['user_motor_vinicius', 'user_motor_sebastiao'];
 
 
+const SEPARATOR_STORE_LINKS = [
+  {
+    "storeName": "CASA ROCCA ASA SUL - MATRIZ",
+    "storeKey": "casa rocca asa sul matriz",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "COMPER ASA SUL",
+    "storeKey": "comper asa sul",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "3-COMPER/FORT",
+    "network": "Comper/Fort"
+  },
+  {
+    "storeName": "COSTA ADE",
+    "storeKey": "costa ade",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "COSTA UNIEURO",
+    "storeKey": "costa unieuro",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "DIA A DIA GUARA",
+    "storeKey": "dia a dia guara",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA JARDIM BOTANICO",
+    "storeKey": "dia a dia jardim botanico",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA SIA",
+    "storeKey": "dia a dia sia",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA VICENTE PIRES RUA 04",
+    "storeKey": "dia a dia vicente pires rua 04",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA VICENTE PIRES RUA 12",
+    "storeKey": "dia a dia vicente pires rua 12",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA DIA RIACHO FUNDO",
+    "storeKey": "dia a dia riacho fundo",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "FORT TAGUATINGA",
+    "storeKey": "fort taguatinga",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "3-COMPER/FORT",
+    "network": "Comper/Fort"
+  },
+  {
+    "storeName": "VIVENDAS CAMPING CLUB AGUAS LINDAS",
+    "storeKey": "vivendas camping club aguas lindas",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "VIVENDAS COMERCIAL TAGN",
+    "storeKey": "vivendas comercial tagn",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "VIVENDAS EQNL",
+    "storeKey": "vivendas eqnl",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "VIVENDAS SETOR O",
+    "storeKey": "vivendas setor o",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "VIVENDAS SOL NASCENTE EQNP",
+    "storeKey": "vivendas sol nascente eqnp",
+    "separator": "Anderson",
+    "separatorRaw": "9 - SEPARADOR ANDERSON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "NOSSA KAZA ANHANGUERA B",
+    "storeKey": "nossa kaza anhanguera b",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA BRAZLÂNDIA",
+    "storeKey": "nossa kaza brazlandia",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA CENTRO",
+    "storeKey": "nossa kaza centro",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA CHACARA YPIRANGA A",
+    "storeKey": "nossa kaza chacara ypiranga a",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA CÉU AZUL",
+    "storeKey": "nossa kaza ceu azul",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA ESPLANADA 3",
+    "storeKey": "nossa kaza esplanada 3",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA FUMAL",
+    "storeKey": "nossa kaza fumal",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA FUMAL 01",
+    "storeKey": "nossa kaza fumal 01",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA MARAVILHA",
+    "storeKey": "nossa kaza maravilha",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA PARK JK",
+    "storeKey": "nossa kaza park jk",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA PARQUE ALVORADA 1",
+    "storeKey": "nossa kaza parque alvorada 1",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA PARQUE ARAGUARI",
+    "storeKey": "nossa kaza parque araguari",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA PEDREGAL",
+    "storeKey": "nossa kaza pedregal",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA PONTE ALTA",
+    "storeKey": "nossa kaza ponte alta",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA SANTA MARIA",
+    "storeKey": "nossa kaza santa maria",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA TAGUATINGA NORTE",
+    "storeKey": "nossa kaza taguatinga norte",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA VALPARAISO",
+    "storeKey": "nossa kaza valparaiso",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "NOSSA KAZA VIEGAS",
+    "storeKey": "nossa kaza viegas",
+    "separator": "Caio",
+    "separatorRaw": "3 - SEPARADOR CAIO",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "ATACADÃO DIA A DIA - ITUMBIARA",
+    "storeKey": "dia a dia itumbiara",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "BRETAS ITUMBIARA",
+    "storeKey": "bretas itumbiara",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS LARANJEIRAS",
+    "storeKey": "bretas laranjeiras",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS MONTE CRISTO",
+    "storeKey": "bretas monte cristo",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS MORADA DO SOL",
+    "storeKey": "bretas morada do sol",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS SENADOR CANEDO",
+    "storeKey": "bretas senador canedo",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS SOL NASCENTE",
+    "storeKey": "bretas sol nascente",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS VEIGA JARDIM",
+    "storeKey": "bretas veiga jardim",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS VILA JARAGUA",
+    "storeKey": "bretas vila jaragua",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS VILA PEDROSO",
+    "storeKey": "bretas vila pedroso",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "COSTA AVENIDA GOIÁS",
+    "storeKey": "costa avenida goias",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "COSTA LARANJEIRAS",
+    "storeKey": "costa laranjeiras",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "COSTA RIO VERDE",
+    "storeKey": "costa rio verde",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "COSTA T-63",
+    "storeKey": "costa t 63",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "DIA A DIA CESAR LATES",
+    "storeKey": "dia a dia cesar lates",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA RIO VERDE",
+    "storeKey": "dia a dia rio verde",
+    "separator": "Daniel",
+    "separatorRaw": "8 - SEPARADOR DANIEL",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "BRETAS  AGUAS LINDAS",
+    "storeKey": "bretas aguas lindas",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "CHACARA AGUA LIMPA",
+    "storeKey": "chacara agua limpa",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "COMPER AGUAS CLARAS",
+    "storeKey": "comper aguas claras",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "3-COMPER/FORT",
+    "network": "Comper/Fort"
+  },
+  {
+    "storeName": "COSTA TAGUATINGA",
+    "storeKey": "costa taguatinga",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "DD AGUAS CLARAS",
+    "storeKey": "dia a dia aguas claras",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DD CEILÂNDIA NORTE",
+    "storeKey": "dia a dia ceilandia norte",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA 070",
+    "storeKey": "dia a dia 070",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA AGUAS LINDAS",
+    "storeKey": "dia a dia aguas lindas",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA CEILANDIA CENTRO",
+    "storeKey": "dia a dia ceilandia centro",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA EPTG",
+    "storeKey": "dia a dia eptg",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA GURUPI",
+    "storeKey": "dia a dia gurupi",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA P SUL",
+    "storeKey": "dia a dia p sul",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA SANTO ANTONIO",
+    "storeKey": "dia a dia santo antonio",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA TAGUATINGA SUL",
+    "storeKey": "dia a dia taguatinga sul",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "FORT CEILANDIA",
+    "storeKey": "fort ceilandia",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "3-COMPER/FORT",
+    "network": "Comper/Fort"
+  },
+  {
+    "storeName": "FORT SOL NASCENTE",
+    "storeKey": "fort sol nascente",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "3-COMPER/FORT",
+    "network": "Comper/Fort"
+  },
+  {
+    "storeName": "VIVENDAS AGUAS LINDAS",
+    "storeKey": "vivendas aguas lindas",
+    "separator": "Geanderson",
+    "separatorRaw": "5 - SEPARADOR GEANDERSON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "ATACADAO DIA A DIA SAMAMBAIA",
+    "storeKey": "dia a dia samambaia",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "BRETAS FORMOSA",
+    "storeKey": "bretas formosa",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "CASA ROCCA LAGO NORTE - FILIAL",
+    "storeKey": "casa rocca lago norte filial",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "COMPER GAMA",
+    "storeKey": "comper gama",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "3-COMPER/FORT",
+    "network": "Comper/Fort"
+  },
+  {
+    "storeName": "COMPER SOBRADINHO",
+    "storeKey": "comper sobradinho",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "3-COMPER/FORT",
+    "network": "Comper/Fort"
+  },
+  {
+    "storeName": "COSTA LUZIÂNIA",
+    "storeKey": "costa luziania",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "COSTA TAQUARI",
+    "storeKey": "costa taquari",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "COSTA VALPARAISO",
+    "storeKey": "costa valparaiso",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "DIA  A DIA PLANALTINA MESTRE D´ARMAS",
+    "storeKey": "dia a dia planaltina mestre d armas",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA FORMOSA",
+    "storeKey": "dia a dia formosa",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA PLANALTINA DF",
+    "storeKey": "dia a dia planaltina df",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA PLANALTINA GO",
+    "storeKey": "dia a dia planaltina go",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA SOBRADINHO",
+    "storeKey": "dia a dia sobradinho",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "FORT PLANALTINA",
+    "storeKey": "fort planaltina",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "3-COMPER/FORT",
+    "network": "Comper/Fort"
+  },
+  {
+    "storeName": "FORT VALPARAISO",
+    "storeKey": "fort valparaiso",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "3-COMPER/FORT",
+    "network": "Comper/Fort"
+  },
+  {
+    "storeName": "SUPER JOCKEY EMPORIO",
+    "storeKey": "super jockey emporio",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "SUPERVENDAS RECANTO 2 RCT",
+    "storeKey": "supervendas recanto 2 rct",
+    "separator": "João Victor",
+    "separatorRaw": "7 - SEPARADOR JOÃO VICTOR",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "ALVORADA",
+    "storeKey": "alvorada",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "11-MERCADOS ALEATÓRIOS",
+    "network": "Mercados Aleatórios"
+  },
+  {
+    "storeName": "BRETAS ALPHAVILLE",
+    "storeKey": "bretas alphaville",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS ANA LUCIA",
+    "storeKey": "bretas ana lucia",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS ANHANGUERA",
+    "storeKey": "bretas anhanguera",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS ARMAZEM",
+    "storeKey": "bretas armazem",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS BAIRRO GOIÁ",
+    "storeKey": "bretas bairro goia",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS CAMPINAS SAO JOSE",
+    "storeKey": "bretas campinas sao jose",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS CARDOSO",
+    "storeKey": "bretas cardoso",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS GARAVELO",
+    "storeKey": "bretas garavelo",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "BRETAS GOIANIA SHOPPING",
+    "storeKey": "bretas goiania shopping",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "13-BRETAS",
+    "network": "Bretas"
+  },
+  {
+    "storeName": "COSTA GO-070",
+    "storeKey": "costa go 070",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "COSTA GOIANIA",
+    "storeKey": "costa goiania",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "COSTA JARDIM GOIÁS",
+    "storeKey": "costa jardim goias",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "COSTA SENADOR CANEDO",
+    "storeKey": "costa senador canedo",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "DIA A DIA APARECIDA DE GOIANIA",
+    "storeKey": "dia a dia aparecida de goiania",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA HORACIO COSTA",
+    "storeKey": "dia a dia horacio costa",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA DIA GOIANESIA",
+    "storeKey": "dia a dia goianesia",
+    "separator": "Matheus",
+    "separatorRaw": "2 - SEPARADOR MATHEUS",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "ATACADAO DIA A DIA RECANTO DAS EMAS",
+    "storeKey": "dia a dia recanto das emas",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "CERRAMIX SUPERMERCADOS",
+    "storeKey": "cerramix supermercados",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "22-CONSIGNADOS VARIADOS",
+    "network": "Consignados Variados"
+  },
+  {
+    "storeName": "COSTA SANTA MARIA",
+    "storeKey": "costa santa maria",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "15-COSTA ATACADÃO",
+    "network": "Costa Atacadão"
+  },
+  {
+    "storeName": "DIA A DIA FURNAS",
+    "storeKey": "dia a dia furnas",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA GAMA",
+    "storeKey": "dia a dia gama",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA LEM-BA",
+    "storeKey": "dia a dia lem ba",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA LUZIANIA",
+    "storeKey": "dia a dia luziania",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA NOVO GAMA",
+    "storeKey": "dia a dia novo gama",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "DIA A DIA PARK JK LUZIÂNIA",
+    "storeKey": "dia a dia park jk luziania",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "2-DIA A DIA",
+    "network": "Dia a Dia"
+  },
+  {
+    "storeName": "ECONOMART BARREIRAS",
+    "storeKey": "economart barreiras",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "22-CONSIGNADOS VARIADOS",
+    "network": "Consignados Variados"
+  },
+  {
+    "storeName": "ECONOMART LEM",
+    "storeKey": "economart lem",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "22-CONSIGNADOS VARIADOS",
+    "network": "Consignados Variados"
+  },
+  {
+    "storeName": "FORT RECANTO",
+    "storeKey": "fort recanto",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "3-COMPER/FORT",
+    "network": "Comper/Fort"
+  },
+  {
+    "storeName": "VIVENDAS LOJA 102",
+    "storeKey": "vivendas loja 102",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "VIVENDAS LOJA 112",
+    "storeKey": "vivendas loja 112",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "VIVENDAS NOVO GAMA LUNA",
+    "storeKey": "vivendas novo gama luna",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "VIVENDAS RECANTO NSF MATRIZ LOJA 29",
+    "storeKey": "vivendas recanto nsf matriz loja 29",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  },
+  {
+    "storeName": "VIVENDAS VS",
+    "storeKey": "vivendas vs",
+    "separator": "Ramon",
+    "separatorRaw": "4 - SEPARADOR RAMON",
+    "rede": "5-VIVENDAS",
+    "network": "Vivendas"
+  }
+];
+
+
 const ROLE_LABELS = {
   admin: 'Administrador',
   cd: 'CD',
@@ -47,7 +995,7 @@ const ROLE_LABELS = {
 };
 
 
-const ROUTE_DATASET_VERSION = 'rotas_motoristas_2026_05_14_v11_prioridades_operacionais';
+const ROUTE_DATASET_VERSION = 'rotas_motoristas_2026_05_14_v13_separadores_conciliacao';
 
 const ROUTE_DATASET = {
   "users": [
@@ -80,7 +1028,8 @@ const ROUTE_DATASET = {
       "name": "Carlos CD",
       "username": "cd1",
       "password": "123456",
-      "role": "cd"
+      "role": "cd",
+      "allowedBoxTypes": ["folhagens", "bandejas"]
     },
     {
       "id": "user_view",
@@ -3080,6 +4029,7 @@ const ROUTE_DATASET = {
 const VIEW_META = {
   dashboard: { title: 'Dashboard', subtitle: 'Visão geral da operação em tempo real' },
   saidas: { title: 'Saídas do CD', subtitle: 'Lançamento de caixas enviadas por loja e rota' },
+  resumoEnvios: { title: 'Resumo de Envios', subtitle: 'Resumo das caixas lançadas pelo CD para as lojas' },
   entregasMotorista: { title: 'Entrega do Motorista', subtitle: 'Validação do total deixado na loja pelo motorista' },
   recebimentos: { title: 'Recebimento na Loja', subtitle: 'Confirmação do promotor com comparação automática' },
   recolhimentos: { title: 'Recolhimentos', subtitle: 'Registro do motorista com trava de saldo por loja' },
@@ -3105,6 +4055,7 @@ const VIEW_META = {
 const NAV_ITEMS = [
   { key: 'dashboard', label: 'Dashboard', roles: ['admin', 'cd', 'driver', 'promoter', 'viewer'] },
   { key: 'saidas', label: 'Saídas do CD', roles: ['admin', 'cd'] },
+  { key: 'resumoEnvios', label: 'Resumo de Envios', roles: ['admin', 'cd'] },
   { key: 'entregasMotorista', label: 'Entrega do Motorista', roles: ['admin', 'driver'] },
   { key: 'recebimentos', label: 'Recebimento na Loja', roles: ['admin', 'promoter'] },
   { key: 'recolhimentos', label: 'Recolhimentos', roles: ['admin', 'driver'] },
@@ -3129,7 +4080,7 @@ const NAV_ITEMS = [
 
 const MOBILE_PRIORITY_BY_ROLE = {
   admin: ['dashboard', 'pendencias', 'fechamento', 'divergencias'],
-  cd: ['dashboard', 'saidas', 'retornos', 'pendencias'],
+  cd: ['dashboard', 'saidas', 'resumoEnvios', 'retornos'],
   driver: ['dashboard', 'entregasMotorista', 'recolhimentos', 'caixasOcupadas'],
   promoter: ['dashboard', 'recebimentos', 'caixasLiberadas', 'pendencias'],
   viewer: ['dashboard', 'estoque', 'divergencias'],
@@ -3138,6 +4089,7 @@ const MOBILE_PRIORITY_BY_ROLE = {
 const MOBILE_ICON_BY_VIEW = {
   dashboard: '🏠',
   saidas: '📦',
+  resumoEnvios: '📋',
   entregasMotorista: '🚚',
   recebimentos: '✅',
   recolhimentos: '↩️',
@@ -3165,6 +4117,7 @@ let currentUser = null;
 let passwordChangeUser = null;
 let currentView = 'dashboard';
 let backendMode = 'local';
+const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '' };
 let firebaseDb = null;
 let firebaseRootRef = null;
 let unsubscribeFirebase = null;
@@ -3263,6 +4216,39 @@ function deepClone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
+function sanitizeForFirebase(value) {
+  const clean = (item) => {
+    if (typeof item === 'undefined' || typeof item === 'function') return null;
+    if (item === null) return null;
+    if (Array.isArray(item)) return item.map((child) => clean(child));
+    if (typeof item === 'object') {
+      const output = {};
+      Object.entries(item).forEach(([key, child]) => {
+        if (typeof child === 'undefined' || typeof child === 'function') {
+          output[key] = null;
+        } else {
+          output[key] = clean(child);
+        }
+      });
+      return output;
+    }
+    return item;
+  };
+  return clean(value);
+}
+
+function firebaseErrorMessage(error) {
+  const code = error && error.code ? String(error.code) : '';
+  const message = error && error.message ? String(error.message) : '';
+  if (code.includes('PERMISSION_DENIED') || message.toLowerCase().includes('permission_denied') || message.toLowerCase().includes('permission denied')) {
+    return 'Sem permissão no Firebase. Confira as regras do Realtime Database.';
+  }
+  if (message.toLowerCase().includes('undefined')) {
+    return 'Erro nos dados enviados ao Firebase. Corrigido para limpar campos vazios; atualize a página e tente novamente.';
+  }
+  return message ? `Erro ao salvar no Firebase: ${message}` : 'Erro ao salvar no Firebase.';
+}
+
 function createRouteSeedData() {
   return deepClone(ROUTE_DATASET);
 }
@@ -3274,6 +4260,66 @@ function normalizeText(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+}
+
+
+function normalizeStoreLinkName(name) {
+  let value = normalizeText(name);
+  value = value.replace(/^atacadao dia a dia /, 'dia a dia ');
+  value = value.replace(/^dd /, 'dia a dia ');
+  value = value.replace(/^dia dia /, 'dia a dia ');
+  value = value.replace(/^ch agua limpa$/, 'chacara agua limpa');
+  value = value.replace(/^casa rocca mt lago norte filial$/, 'casa rocca lago norte filial');
+  value = value.replace(/^casarocca trm matriz$/, 'casa rocca asa sul matriz');
+  value = value.replace(/^cerra mix$/, 'cerramix supermercados');
+  value = value.replace(/^loja /, '');
+  return value;
+}
+
+function getSeparatorLinkForStore(store) {
+  const key = normalizeStoreLinkName(store?.name || '');
+  return SEPARATOR_STORE_LINKS.find((item) => item.storeKey === key) || null;
+}
+
+function getStoreSeparator(store) {
+  return String(store?.separator || store?.separatorName || getSeparatorLinkForStore(store)?.separator || '').trim();
+}
+
+function storeNeedsCommercialConciliation(store) {
+  const hasNetwork = !!String(store?.network || store?.rede || '').trim();
+  const hasSeparator = !!getStoreSeparator(store);
+  return !hasNetwork || !hasSeparator;
+}
+
+function uniqueSeparators(state = appState) {
+  return [...new Set((state?.stores || [])
+    .map((store) => getStoreSeparator(store))
+    .filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+function buildSeparatorOptions(selectedValue = '', state = appState) {
+  return uniqueSeparators(state)
+    .map((separator) => `<option value="${escapeHtml(separator)}" ${separator === selectedValue ? 'selected' : ''}>${escapeHtml(separator)}</option>`)
+    .join('');
+}
+
+function canUseSeparatorFilter(user) {
+  return !user || user.role === 'admin' || canUserLaunchBoxType(user, 'folhagens');
+}
+
+function enrichStoreCommercialLinks(state) {
+  (state?.stores || []).forEach((store) => {
+    const link = getSeparatorLinkForStore(store);
+    if (link) {
+      if (!String(store.separator || '').trim()) store.separator = link.separator;
+      if (!String(store.separatorRaw || '').trim()) store.separatorRaw = link.separatorRaw;
+      if (!String(store.sourceRede || '').trim()) store.sourceRede = link.rede;
+      if (!String(store.network || '').trim()) store.network = link.network;
+      if (!String(store.rede || '').trim()) store.rede = link.rede;
+    }
+  });
+  return state;
 }
 
 
@@ -3304,6 +4350,105 @@ function formatStoreNameForUser(name) {
   value = value.replace(/\s+/g, ' ').trim();
   const titled = toTitleCasePt(value);
   return titled.replace(/^Dia A Dia\b/, 'Dia a Dia');
+}
+
+
+function inferStoreNetwork(store) {
+  const rawName = String(store?.name || '');
+  const normalizedName = normalizeText(rawName);
+  const normalizedNetwork = normalizeText(store?.network || store?.rede || '');
+
+  const prefixRules = [
+    { tests: ['atacadao dia a dia', 'dia a dia', 'dia dia', 'dd'], label: 'Dia a Dia' },
+    { tests: ['bretas'], label: 'Bretas' },
+    { tests: ['comper'], label: 'Comper' },
+    { tests: ['fort'], label: 'Fort' },
+    { tests: ['costa'], label: 'Costa' },
+    { tests: ['assai'], label: 'Assaí' },
+    { tests: ['vivendas'], label: 'Vivendas' },
+    { tests: ['nossa kaza', 'nossa kasa'], label: 'Nossa Kaza' },
+    { tests: ['tatico'], label: 'Tático' },
+    { tests: ['economart'], label: 'Economart' },
+    { tests: ['casa rocca'], label: 'Casa Rocca' },
+    { tests: ['cerramix'], label: 'Cerramix' },
+    { tests: ['supervendas'], label: 'Supervendas' },
+    { tests: ['super jockey'], label: 'Super Jockey' },
+    { tests: ['alvorada'], label: 'Alvorada' },
+    { tests: ['manifesto'], label: 'Manifesto' },
+  ];
+
+  for (const rule of prefixRules) {
+    if (rule.tests.some((test) => normalizedName === test || normalizedName.startsWith(`${test} `))) {
+      return rule.label;
+    }
+  }
+
+  for (const rule of prefixRules) {
+    if (rule.tests.some((test) => normalizedNetwork.includes(test))) {
+      return rule.label;
+    }
+  }
+
+  const fallback = String(store?.network || store?.rede || 'Sem rede')
+    .replace(/^\s*\d+\s*[-–]\s*/g, '')
+    .replace(/^rede\s+/i, '')
+    .trim();
+  return fallback ? toTitleCasePt(fallback).replace(/^Dia A Dia\b/, 'Dia a Dia') : 'Sem rede';
+}
+
+function getStoreUnitName(store) {
+  let value = formatStoreNameForUser(store?.name || '');
+  const network = inferStoreNetwork(store);
+  const prefixes = [
+    network,
+    'Atacadão Dia a Dia',
+    'Dia a Dia',
+    'DD',
+    'Bretas',
+    'Costa',
+    'Comper',
+    'Fort',
+    'Assaí',
+    'Vivendas',
+    'Nossa Kaza',
+    'Nossa Kasa',
+    'Tático',
+    'Economart',
+    'Casa Rocca',
+    'Cerramix',
+    'Supervendas',
+    'Super Jockey',
+  ].filter(Boolean);
+
+  prefixes.forEach((prefix) => {
+    const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    value = value.replace(new RegExp(`^${escaped}\\s*[-–:]?\\s*`, 'i'), '');
+  });
+
+  value = value.replace(/\s+/g, ' ').trim();
+  return value || formatStoreNameForUser(store?.name || '-');
+}
+
+function getStoreOptionLabel(store) {
+  const fullName = formatStoreNameForUser(store?.name || '-');
+  const network = inferStoreNetwork(store);
+  const unit = getStoreUnitName(store);
+  return `${fullName} — Rede ${network}, Loja ${unit}`;
+}
+
+function buildNetworkOptions(selectedValue = '', state = appState) {
+  return uniqueNetworks(state)
+    .map((network) => `<option value="${escapeHtml(network)}" ${network === selectedValue ? 'selected' : ''}>${escapeHtml(network)}</option>`)
+    .join('');
+}
+
+function hasOutboundForStoreDate(storeId, date = todayStr(), state = appState) {
+  return state.movements.outbounds.some((item) =>
+    isActiveMovement(item)
+    && item.status !== 'historico'
+    && item.storeId === storeId
+    && item.date === date
+  );
 }
 
 function formatNameForInput(user, state = appState) {
@@ -3370,6 +4515,7 @@ function applyRouteDataset(base) {
   base.users = [...seededUsers, ...customUsers];
   base.routes = seedData.routes;
   base.stores = seedData.stores;
+  enrichStoreCommercialLinks(base);
   normalizePromoterUserNames(base);
   base.storeStocks = nextStocks;
   base.routeDatasetVersion = ROUTE_DATASET_VERSION;
@@ -3481,6 +4627,23 @@ function qtyInputs(prefix, values = emptyQty(), readonly = false) {
   `;
 }
 
+function qtyInputsForUser(prefix, user, values = emptyQty()) {
+  return `
+    <div class="qty-grid">
+      ${BOX_TYPES.map((item) => {
+        const allowed = canUserLaunchBoxType(user, item.key);
+        return `
+          <div class="qty-box ${allowed ? '' : 'disabled-box'}">
+            <label for="${prefix}-${item.key}">${item.label}</label>
+            <input ${allowed ? '' : 'disabled'} type="number" min="0" step="1" id="${prefix}-${item.key}" name="${item.key}" value="${allowed ? safeInt(values?.[item.key]) : 0}" />
+            ${allowed ? '' : '<small class="muted">Sem permissão para lançar</small>'}
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
 function readQtyFromForm(form, prefix) {
   const result = emptyQty();
   BOX_TYPES.forEach((item) => {
@@ -3513,6 +4676,8 @@ function normalizeUserRecord(user) {
   normalized.passwordChangedAt = normalized.passwordChangedAt || null;
   normalized.forcePasswordChange = normalized.forcePasswordChange === false ? false : !normalized.passwordChangedAt && normalized.password === INITIAL_PASSWORD;
   normalized.allowedViews = normalizeAllowedViewsForRole(normalized.role, normalized.allowedViews);
+  normalized.allowedBoxTypes = normalizeAllowedBoxTypesForUser(normalized.role, normalized.allowedBoxTypes);
+  if (normalized.role !== 'cd') delete normalized.allowedBoxTypes;
   return normalized;
 }
 
@@ -3529,6 +4694,44 @@ function normalizeAllowedViewsForRole(role, allowedViews) {
   const views = [...new Set(allowedViews)].filter((view) => allowedSet.has(view));
   if (allowedSet.has('dashboard') && !views.includes('dashboard')) views.unshift('dashboard');
   return views.length ? views : null;
+}
+
+function normalizeAllowedBoxTypesForUser(role, allowedBoxTypes) {
+  if (role !== 'cd') return null;
+  const allKeys = BOX_TYPES.map((item) => item.key);
+  const selected = Array.isArray(allowedBoxTypes)
+    ? [...new Set(allowedBoxTypes)].filter((key) => allKeys.includes(key))
+    : allKeys;
+  return selected.length ? selected : allKeys;
+}
+
+function getAllowedBoxTypesForUser(user) {
+  if (!user || user.role !== 'cd') return BOX_TYPES.map((item) => item.key);
+  return normalizeAllowedBoxTypesForUser('cd', user.allowedBoxTypes);
+}
+
+function canUserLaunchBoxType(user, boxKey) {
+  if (!user || user.role !== 'cd') return true;
+  return getAllowedBoxTypesForUser(user).includes(boxKey);
+}
+
+function getAllowedBoxTypesLabel(user) {
+  const keys = getAllowedBoxTypesForUser(user);
+  return BOX_TYPES.filter((item) => keys.includes(item.key)).map((item) => item.label).join(' e ') || 'Nenhuma caixa liberada';
+}
+
+function renderBoxTypePermissionChecks(userId, allowedBoxTypes = BOX_TYPES.map((item) => item.key), className = 'user-box-permission') {
+  const allowed = new Set(normalizeAllowedBoxTypesForUser('cd', allowedBoxTypes));
+  return `
+    <div class="permissions-grid compact">
+      ${BOX_TYPES.map((item) => `
+        <label class="permission-check">
+          <input type="checkbox" class="${className}" data-user-id="${userId || ''}" value="${item.key}" ${allowed.has(item.key) ? 'checked' : ''} />
+          <span>${item.label}</span>
+        </label>
+      `).join('')}
+    </div>
+  `;
 }
 
 function getEffectiveAllowedViews(user) {
@@ -3598,6 +4801,19 @@ function getGoianiaExpectedQty(date = todayStr(), state = appState) {
   return getGoianiaOutbounds(date, state).reduce((acc, item) => addQty(acc, item.qty), emptyQty());
 }
 
+function getVisibleOutboundSummaryRows(date = todayStr(), state = appState, user = currentUser) {
+  return state.movements.outbounds
+    .filter((item) => isActiveMovement(item) && item.status !== 'historico')
+    .filter((item) => !date || item.date === date)
+    .filter((item) => {
+      if (!user || user.role === 'admin') return true;
+      if (user.role === 'cd') {
+        return item.createdById ? item.createdById === user.id : item.createdBy === user.name;
+      }
+      return isMovementVisibleToUser(item, user, state);
+    });
+}
+
 function getGoianiaTransferQty(date = todayStr(), state = appState) {
   return (state.movements.goianiaTransfers || [])
     .filter((item) => item.date === date)
@@ -3610,7 +4826,7 @@ function getRouteDriverName(routeId, state = appState) {
 }
 
 function uniqueNetworks(state = appState) {
-  return [...new Set(state.stores.map((store) => store.network || store.rede || 'Sem rede'))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  return [...new Set(state.stores.map((store) => inferStoreNetwork(store)))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
 }
 
 function slugId(value) {
@@ -3647,7 +4863,7 @@ function ensureStateShape(state) {
   base.movements.outbounds = base.movements.outbounds.map((item) => ({
     ...item,
     qty: sanitizeQty(item.qty),
-    receivedQty: item.receivedQty ? sanitizeQty(item.receivedQty) : item.receivedQty,
+    receivedQty: item.receivedQty ? sanitizeQty(item.receivedQty) : null,
   }));
   base.movements.receipts = base.movements.receipts.map((item) => ({ ...item, qty: sanitizeQty(item.qty) }));
   base.movements.driverDeliveries = base.movements.driverDeliveries.map((item) => ({
@@ -3715,6 +4931,7 @@ function ensureStateShape(state) {
   base.users = Array.isArray(base.users) && base.users.length ? base.users.map(normalizeUserRecord) : seedData.users.map(normalizeUserRecord);
   base.stores = Array.isArray(base.stores) && base.stores.length ? base.stores : seedData.stores;
   base.routes = Array.isArray(base.routes) && base.routes.length ? base.routes : seedData.routes;
+  enrichStoreCommercialLinks(base);
   normalizePromoterUserNames(base);
 
   base.divergences = base.divergences.map((div) => {
@@ -3739,6 +4956,9 @@ function ensureStateShape(state) {
   base.stores.forEach((store) => {
     base.storeStocks[store.id] = sanitizeQty(base.storeStocks[store.id] || emptyQty());
     if (!store.highStockLimit) store.highStockLimit = 100;
+    const link = getSeparatorLinkForStore(store);
+    if (link && !String(store.separator || '').trim()) store.separator = link.separator;
+    if (link && !String(store.sourceRede || '').trim()) store.sourceRede = link.rede;
     store.noPromoter = isBretasStore(store);
     if (store.noPromoter) store.promoterId = null;
   });
@@ -3816,7 +5036,7 @@ async function loadState() {
       const snap = await firebaseRootRef.get();
       let state = snap.exists() ? ensureStateShape(snap.val()) : createSeedState();
       if (!snap.exists()) {
-        await firebaseRootRef.set(state);
+        await firebaseRootRef.set(sanitizeForFirebase(state));
       }
 
       unsubscribeFirebase = firebaseRootRef.on('value', (snapshot) => {
@@ -3860,7 +5080,7 @@ async function persistMutation(mutationType, payload, successMessage, actorOverr
       const result = await firebaseRootRef.transaction((current) => {
         const base = ensureStateShape(current || createSeedState());
         const applied = applyMutation(base, mutationType, payload, actor, true);
-        return applied.ok ? applied.state : undefined;
+        return applied.ok ? sanitizeForFirebase(applied.state) : undefined;
       });
       if (!result.committed) {
         showToast('Não foi possível concluir a ação. Atualize a tela e tente novamente.', 'error');
@@ -3868,9 +5088,10 @@ async function persistMutation(mutationType, payload, successMessage, actorOverr
       }
       appState = ensureStateShape(result.snapshot.val());
     } catch (error) {
-      console.error(error);
-      showToast('Erro ao salvar no Firebase.', 'error');
-      return { ok: false, error: error.message };
+      console.error('Erro ao salvar no Firebase:', error);
+      const message = firebaseErrorMessage(error);
+      showToast(message, 'error');
+      return { ok: false, error: message };
     }
   } else {
     appState = simulation.state;
@@ -3952,6 +5173,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       forcePasswordChange: true,
       passwordChangedAt: null,
       initialPasswordChanged: false,
+      allowedBoxTypes: role === 'cd' ? normalizeAllowedBoxTypesForUser('cd', payload.allowedBoxTypes) : null,
     });
 
     if (role === 'promoter') {
@@ -3966,6 +5188,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       if (!route) return { ok: false, error: 'Selecione a rota vinculada ao motorista.' };
       newUser.routeId = route.id;
     }
+
+    if (role !== 'cd') delete newUser.allowedBoxTypes;
 
     state.users.push(newUser);
     audit('Usuários', 'Novo usuário criado', `${name} foi criado com perfil ${ROLE_LABELS[role]} e login ${username}.`);
@@ -4011,6 +5235,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     target.role = role;
     target.username = username;
     target.allowedViews = normalizeAllowedViewsForRole(role, payload.allowedViews);
+    target.allowedBoxTypes = normalizeAllowedBoxTypesForUser(role, payload.allowedBoxTypes);
+    if (role !== 'cd') delete target.allowedBoxTypes;
 
     delete target.storeId;
     delete target.routeId;
@@ -4058,11 +5284,31 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       promoterId: null,
       noPromoter,
       highStockLimit: safeInt(payload.highStockLimit) || 100,
+      separator: String(payload.separator || '').trim() || null,
       createdAt: nowIso(),
       createdBy: actor.name,
     });
     state.storeStocks[id] = emptyQty();
     audit('Lojas', 'Nova loja cadastrada', `${name} foi vinculada à rota ${route.name} / motorista ${getRouteDriverName(route.id, state)}.`);
+  }
+
+  if (type === 'UPDATE_STORE_LINKS') {
+    if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode conciliar loja, rede e separador.' };
+    const store = getStoreById(payload.storeId, state);
+    if (!store) return { ok: false, error: 'Selecione uma loja válida.' };
+    const network = String(payload.network || '').trim();
+    const separator = String(payload.separator || '').trim();
+    if (!network) return { ok: false, error: 'Informe a rede da loja.' };
+    if (!separator) return { ok: false, error: 'Informe o separador da loja.' };
+
+    const previous = `Rede ${store.network || store.rede || '-'} / Separador ${getStoreSeparator(store) || '-'}`;
+    store.network = network.toUpperCase();
+    store.rede = network.toUpperCase();
+    store.separator = separator;
+    store.separatorRaw = separator;
+    store.conciliatedAt = nowIso();
+    store.conciliatedBy = actor.name;
+    audit('Lojas', 'Conciliação de loja', `${store.name}: ${previous} → Rede ${store.network} / Separador ${store.separator}.`);
   }
 
   if (type === 'CONFIRM_DRIVER_DELIVERY') {
@@ -4242,6 +5488,10 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode lançar saídas.' };
     const qty = sanitizeQty(payload.qty);
     if (sumQty(qty) <= 0) return { ok: false, error: 'Informe pelo menos uma quantidade para saída.' };
+    if (actor.role === 'cd') {
+      const forbiddenBox = BOX_TYPES.find((item) => safeInt(qty[item.key]) > 0 && !canUserLaunchBoxType(actor, item.key));
+      if (forbiddenBox) return { ok: false, error: `Seu usuário não tem permissão para lançar ${forbiddenBox.label}.` };
+    }
 
     const store = getStoreById(payload.storeId, state);
     if (!store) return { ok: false, error: 'Selecione uma loja válida.' };
@@ -4253,6 +5503,10 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const driverId = getEffectiveDriver(routeId, outboundDate, store.id, state);
     if (!driverId) return { ok: false, error: 'A rota desta loja não possui motorista vinculado. Corrija o motorista no ADM antes de salvar a saída.' };
 
+    if (hasOutboundForStoreDate(store.id, outboundDate, state)) {
+      return { ok: false, error: 'Esta loja já teve saída lançada nessa data. Ela saiu da lista de pendentes.' };
+    }
+
     const cdStock = getCdStock(state);
     if (qtyExceeds(qty, cdStock)) return { ok: false, error: 'O CD não possui caixas suficientes para esta saída.' };
 
@@ -4263,9 +5517,12 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       routeId,
       driverId,
       storeId: store.id,
+      network: inferStoreNetwork(store),
+      separator: getStoreSeparator(store) || null,
       qty,
       status: 'aguardando_loja',
       createdBy: actor.name,
+      createdById: actor.id,
       createdAt: nowIso(),
       receiptId: null,
     });
@@ -4291,6 +5548,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       storeId: outbound.storeId,
       qty,
       createdBy: actor.name,
+      createdById: actor.id,
       createdAt: nowIso(),
     };
     state.movements.receipts.unshift(receipt);
@@ -4416,6 +5674,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       aboveAvailable: isAboveAvailable,
       justification: payload.justification || '',
       createdBy: actor.name,
+      createdById: actor.id,
       createdAt: nowIso(),
       returnBatchId: null,
     });
@@ -4455,6 +5714,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       expectedTotal,
       pickupsCount: pendingPickups.length,
       createdBy: actor.name,
+      createdById: actor.id,
       createdAt: nowIso(),
       justification: payload.justification || '',
     });
@@ -4501,6 +5761,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       reason: payload.reason,
       notes: payload.notes || '',
       createdBy: actor.name,
+      createdById: actor.id,
       createdAt: nowIso(),
     });
     audit('Rotas e Exceções', 'Troca de rota', `${store.name} saiu de ${getRouteById(store.defaultRouteId, state)?.name || '-'} para ${newRoute.name}.`);
@@ -5045,6 +6306,7 @@ function renderCurrentView() {
   const renderers = {
     dashboard: renderDashboard,
     saidas: renderSaidas,
+    resumoEnvios: renderResumoEnvios,
     entregasMotorista: renderEntregasMotorista,
     recebimentos: renderRecebimentos,
     recolhimentos: renderRecolhimentos,
@@ -5864,7 +7126,7 @@ function getStoresForMandatoryScope(payload, state = appState) {
   }
   if (scope === 'network') {
     const network = String(payload.network || '').trim();
-    return state.stores.filter((store) => (store.network || store.rede || '') === network);
+    return state.stores.filter((store) => inferStoreNetwork(store) === network);
   }
   return state.stores.slice();
 }
@@ -6171,10 +7433,139 @@ function renderMetricCard(title, value, icon, tone, note) {
   `;
 }
 
+function renderResumoEnvios() {
+  const date = viewFilters.resumoEnviosDate || todayStr();
+  const networkFilter = viewFilters.resumoEnviosNetwork || '';
+  const cdUserFilter = currentUser.role === 'admin' ? (viewFilters.resumoEnviosCdUserId || '') : '';
+  const rows = getVisibleOutboundSummaryRows(date, appState, currentUser)
+    .filter((item) => {
+      const store = getStoreById(item.storeId);
+      const networkOk = !networkFilter || inferStoreNetwork(store || {}) === networkFilter;
+      const userOk = currentUser.role !== 'admin' || !cdUserFilter || item.createdById === cdUserFilter;
+      return networkOk && userOk;
+    })
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  const totalQty = rows.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
+  const users = [...appState.users]
+    .filter((user) => user.role === 'cd')
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const groupedByCd = rows.reduce((acc, item) => {
+    const key = item.createdById || item.createdBy || 'sem_usuario';
+    if (!acc[key]) acc[key] = { name: getUserById(item.createdById)?.name || item.createdBy || 'Sem usuário', qty: emptyQty(), count: 0 };
+    acc[key].qty = addQty(acc[key].qty, item.qty);
+    acc[key].count += 1;
+    return acc;
+  }, {});
+
+  return `
+    <div class="stack">
+      <div class="cards-grid">
+        ${renderMetricCard('Lojas enviadas hoje', rows.length, '🏬', 'success', currentUser.role === 'cd' ? 'Lançadas por você' : 'Todos os usuários do CD')}
+        ${renderMetricCard('Total enviado', `${sumQty(totalQty)} cx`, '📦', 'success', BOX_TYPES.map((item) => `${item.label}: ${safeInt(totalQty[item.key])}`).join(' • '))}
+        ${renderMetricCard('Folhagens', safeInt(totalQty.folhagens), '🥬', 'success', 'Caixas lançadas no período')}
+        ${renderMetricCard('Bandejas', safeInt(totalQty.bandejas), '🧺', 'success', 'Caixas lançadas no período')}
+      </div>
+
+      <div class="card">
+        <div class="page-header">
+          <div>
+            <h3>Filtro do resumo</h3>
+          </div>
+        </div>
+        <form id="form-resumo-envios" class="form-grid-3">
+          <label>Data
+            <input type="date" name="date" value="${date}" />
+          </label>
+          <label>Rede
+            <select name="network">
+              <option value="">Todas as redes</option>
+              ${buildNetworkOptions(networkFilter)}
+            </select>
+          </label>
+          ${currentUser.role === 'admin' ? `
+            <label>Usuário CD
+              <select name="cdUserId">
+                <option value="">Todos</option>
+                ${users.map((user) => `<option value="${user.id}" ${user.id === cdUserFilter ? 'selected' : ''}>${escapeHtml(user.name)}</option>`).join('')}
+              </select>
+            </label>
+          ` : `
+            <label>Usuário CD
+              <input type="text" value="${escapeHtml(currentUser.name)}" readonly />
+            </label>
+          `}
+        </form>
+      </div>
+
+      ${currentUser.role === 'admin' ? `
+        <div class="card">
+          <div class="section-header"><div><h3>Resumo por usuário do CD</h3></div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Usuário</th><th>Lojas</th><th>Folhagens</th><th>Bandejas</th><th>Total</th></tr></thead>
+              <tbody id="resumo-envios-users-body">
+                ${Object.values(groupedByCd).length ? Object.values(groupedByCd).map((item) => `
+                  <tr>
+                    <td>${escapeHtml(item.name)}</td>
+                    <td>${item.count}</td>
+                    <td>${safeInt(item.qty.folhagens)}</td>
+                    <td>${safeInt(item.qty.bandejas)}</td>
+                    <td><strong>${sumQty(item.qty)}</strong></td>
+                  </tr>
+                `).join('') : `<tr><td colspan="5" class="center muted">Nenhum envio encontrado.</td></tr>`}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="card">
+        <div class="section-header"><div><h3>Envios lançados</h3></div></div>
+        <div class="table-wrap">
+          <table id="resumo-envios-table">
+            <thead>
+              <tr>
+                <th>Hora</th>
+                <th>Usuário CD</th>
+                <th>Rede</th>
+                <th>Loja</th>
+                <th>Rota</th>
+                <th>Folhagens</th>
+                <th>Bandejas</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.length ? rows.map((item) => {
+                const store = getStoreById(item.storeId);
+                return `
+                  <tr data-date="${item.date}" data-network="${escapeHtml(inferStoreNetwork(store || {}))}" data-cd-user-id="${escapeHtml(item.createdById || '')}" data-created-by="${escapeHtml(item.createdBy || '')}">
+                    <td>${item.createdAt ? new Date(item.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                    <td>${escapeHtml(getUserById(item.createdById)?.name || item.createdBy || '-')}</td>
+                    <td>${escapeHtml(inferStoreNetwork(store || {}))}</td>
+                    <td>${escapeHtml(formatStoreNameForUser(store?.name || '-'))}</td>
+                    <td>${escapeHtml(getRouteById(item.routeId)?.name || '-')}</td>
+                    <td>${safeInt(item.qty?.folhagens)}</td>
+                    <td>${safeInt(item.qty?.bandejas)}</td>
+                    <td><strong>${sumQty(item.qty)}</strong></td>
+                  </tr>
+                `;
+              }).join('') : `<tr><td colspan="8" class="center muted">Nenhum envio encontrado.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderSaidas() {
   const date = todayStr();
   const recent = appState.movements.outbounds.filter((item) => isActiveMovement(item) && item.status !== 'historico').slice(0, 10);
-  const stores = [...appState.stores].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const showSeparatorFilter = canUseSeparatorFilter(currentUser);
+  const stores = [...appState.stores]
+    .filter((store) => !hasOutboundForStoreDate(store.id, date))
+    .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
   return `
     <div class="grid-2">
       <div class="card">
@@ -6189,14 +7580,28 @@ function renderSaidas() {
         </div>
 
         <form id="form-saida" class="stack">
-          <div class="form-grid">
+          <div class="form-grid-3">
             <label>Data
               <input type="date" name="date" value="${date}" required />
             </label>
+            <label>Rede
+              <select name="network" id="saida-network">
+                <option value="">Todas as redes</option>
+                ${buildNetworkOptions()}
+              </select>
+            </label>
+            ${showSeparatorFilter ? `
+              <label>Separador
+                <select name="separator" id="saida-separator">
+                  <option value="">Todos os separadores</option>
+                  ${buildSeparatorOptions()}
+                </select>
+              </label>
+            ` : ''}
             <label>Loja
               <select name="storeId" id="saida-store" required>
                 <option value="">Selecione a loja</option>
-                ${stores.map((store) => `<option value="${store.id}">${store.name}${store.network ? ` • ${store.network}` : ''}</option>`).join('')}
+                ${stores.map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
               </select>
             </label>
           </div>
@@ -6204,7 +7609,9 @@ function renderSaidas() {
           <div id="saida-rota-info" class="helper-card compact small">Selecione uma loja.</div>
 
 
-          ${qtyInputs('saida')}
+          ${currentUser.role === 'cd' ? `<div class="helper-card compact small">Seu acesso permite lançar: <strong>${getAllowedBoxTypesLabel(currentUser)}</strong>.</div>` : ''}
+
+          ${qtyInputsForUser('saida', currentUser)}
 
           <div class="form-actions">
             <button type="submit" class="btn btn-primary">Salvar saída</button>
@@ -6227,6 +7634,7 @@ function renderSaidas() {
                 <th>Loja</th>
                 <th>Rota automática</th>
                 <th>Motorista</th>
+                <th>Separador</th>
                 <th>Total</th>
                 <th>Status</th>
               </tr>
@@ -6238,10 +7646,11 @@ function renderSaidas() {
                   <td>${getStoreById(item.storeId)?.name || '-'}</td>
                   <td>${getRouteById(item.routeId)?.name || '-'}</td>
                   <td>${getUserById(item.driverId)?.name || '-'}</td>
+                  <td>${escapeHtml(item.separator || getStoreSeparator(getStoreById(item.storeId)) || '-')}</td>
                   <td>${sumQty(item.qty)}</td>
                   <td>${item.receiptId ? statusTag('ok') : statusTag('warn')}</td>
                 </tr>
-              `).join('') : `<tr><td colspan="6" class="center muted">Nenhuma saída registrada.</td></tr>`}
+              `).join('') : `<tr><td colspan="7" class="center muted">Nenhuma saída registrada.</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -6434,6 +7843,13 @@ function renderRecolhimentos() {
             </label>
           </div>
 
+          <label>Rede
+            <select name="network" id="pickup-network">
+              <option value="">Todas as redes</option>
+              ${buildNetworkOptions(networkFilter)}
+            </select>
+          </label>
+
           <label>Loja
             <select name="storeId" id="pickup-store" required>
               <option value="">Selecione a rota primeiro</option>
@@ -6531,6 +7947,13 @@ function renderCaixasOcupadas() {
               </select>
             </label>
           </div>
+
+          <label>Rede
+            <select name="network" id="occupied-network">
+              <option value="">Todas as redes</option>
+              ${buildNetworkOptions(networkFilter)}
+            </select>
+          </label>
 
           <label>Loja
             <select name="storeId" id="occupied-store" required>
@@ -7027,7 +8450,7 @@ function renderInventario() {
             <label>Loja específica
               <select name="storeId" id="mandatory-inventory-store">
                 <option value="">Selecione</option>
-                ${appState.stores.map((store) => `<option value="${store.id}">${store.name}</option>`).join('')}
+                ${[...appState.stores].sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR')).map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
               </select>
             </label>
             <label>Observação
@@ -7099,10 +8522,16 @@ function renderInventario() {
                 <input type="text" class="locked-date-input" value="${formatDateBR(todayStr())}" readonly aria-readonly="true" />
                 <input type="hidden" name="date" value="${todayStr()}" />
               </label>
+              <label>Rede
+                <select name="network" id="inventario-store-network">
+                  <option value="">Todas as redes</option>
+                  ${buildNetworkOptions()}
+                </select>
+              </label>
               <label>Loja
                 <select name="storeId" id="inventario-store" required>
                   <option value="">Selecione</option>
-                  ${appState.stores.map((store) => `<option value="${store.id}">${store.name}</option>`).join('')}
+                  ${[...appState.stores].sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR')).map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
                 </select>
               </label>
             </div>
@@ -7605,11 +9034,11 @@ function renderRotas() {
 
             <div id="rota-padrao-store-list" class="multi-store-list" role="group" aria-label="Lojas para alterar rota">
               ${[...appState.stores].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')).map((store) => `
-                <label class="multi-store-option" data-search="${normalizeText(`${store.name} ${store.network || ''} ${store.rede || ''}`)}">
+                <label class="multi-store-option" data-search="${normalizeText(`${getStoreOptionLabel(store)} ${inferStoreNetwork(store)}`)}">
                   <input type="checkbox" class="rota-padrao-store-checkbox" value="${store.id}" />
                   <span>
-                    <strong>${store.name}</strong>
-                    <small>${store.network || store.rede || '-'} • Atual: ${getRouteById(store.defaultRouteId)?.name || '-'}</small>
+                    <strong>${escapeHtml(formatStoreNameForUser(store.name))}</strong>
+                    <small>Rede ${escapeHtml(inferStoreNetwork(store))}, Loja ${escapeHtml(getStoreUnitName(store))} • Atual: ${getRouteById(store.defaultRouteId)?.name || '-'}</small>
                   </span>
                 </label>
               `).join('')}
@@ -7671,10 +9100,16 @@ function renderRotas() {
               <label>Data
                 <input type="date" name="date" value="${today}" required />
               </label>
+              <label>Rede
+                <select name="network" id="excecao-rota-network">
+                  <option value="">Todas as redes</option>
+                  ${buildNetworkOptions()}
+                </select>
+              </label>
               <label>Loja
-                <select name="storeId" required>
+                <select name="storeId" id="excecao-rota-store" required>
                   <option value="">Selecione</option>
-                  ${appState.stores.map((store) => `<option value="${store.id}">${store.name}</option>`).join('')}
+                  ${[...appState.stores].sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR')).map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
                 </select>
               </label>
               <label>Nova rota
@@ -7740,8 +9175,11 @@ function renderRotas() {
 
 function renderLojas() {
   const networks = uniqueNetworks();
+  const separators = uniqueSeparators();
   const networkOptions = networks.map((network) => `<option value="${network}">${network}</option>`).join('');
+  const separatorOptions = separators.map((separator) => `<option value="${escapeHtml(separator)}">${escapeHtml(separator)}</option>`).join('');
   const rows = [...appState.stores].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const pendingConciliation = rows.filter(storeNeedsCommercialConciliation);
   return `
     <div class="stack">
       <div class="card">
@@ -7770,6 +9208,7 @@ function renderLojas() {
               <tr>
                 <th>Loja</th>
                 <th>Rede</th>
+                <th>Separador</th>
                 <th>Rota</th>
                 <th>Motorista</th>
                 <th>Promotor</th>
@@ -7784,9 +9223,10 @@ function renderLojas() {
                 const promoter = store.promoterId ? getUserById(store.promoterId) : null;
                 const stock = getStoreStock(store.id);
                 return `
-                  <tr data-network="${store.network || store.rede || 'Sem rede'}">
-                    <td><strong>${store.name}</strong></td>
-                    <td>${store.network || store.rede || '-'}</td>
+                  <tr data-network="${escapeHtml(inferStoreNetwork(store))}">
+                    <td><strong>${escapeHtml(formatStoreNameForUser(store.name))}</strong></td>
+                    <td>${escapeHtml(inferStoreNetwork(store))}</td>
+                    <td>${getStoreSeparator(store) ? escapeHtml(getStoreSeparator(store)) : '<span class="tag danger">Pendente</span>'}</td>
                     <td>${route?.name || '-'}</td>
                     <td>${driver?.name || '-'}</td>
                     <td>${storeRequiresPromoter(store) ? (promoter?.name || '-') : '<span class="tag info">Sem promotor</span>'}</td>
@@ -7795,6 +9235,60 @@ function renderLojas() {
                   </tr>
                 `;
               }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="page-header">
+          <div>
+            <h3>Conciliação de rede e separador</h3>
+          </div>
+          <div class="helper-card small">
+            Pendências: <strong>${pendingConciliation.length}</strong>
+          </div>
+        </div>
+        <form id="form-conciliacao-loja" class="stack">
+          <div class="form-grid-3">
+            <label>Loja
+              <select name="storeId" required>
+                <option value="">Selecione</option>
+                ${rows.map((store) => `<option value="${store.id}">${escapeHtml(formatStoreNameForUser(store.name))}${storeNeedsCommercialConciliation(store) ? ' • Pendente' : ''}</option>`).join('')}
+              </select>
+            </label>
+            <label>Rede
+              <input type="text" name="network" list="redes-cadastradas" placeholder="Ex.: DIA A DIA" required />
+            </label>
+            <label>Separador
+              <input type="text" name="separator" list="separadores-cadastrados" placeholder="Ex.: Matheus" required />
+              <datalist id="separadores-cadastrados">${separatorOptions}</datalist>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Salvar conciliação</button>
+          </div>
+        </form>
+
+        <div class="table-wrap" style="margin-top:14px">
+          <table>
+            <thead>
+              <tr>
+                <th>Loja</th>
+                <th>Rede atual</th>
+                <th>Separador atual</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${pendingConciliation.length ? pendingConciliation.map((store) => `
+                <tr>
+                  <td><strong>${escapeHtml(formatStoreNameForUser(store.name))}</strong></td>
+                  <td>${escapeHtml(inferStoreNetwork(store))}</td>
+                  <td>${getStoreSeparator(store) ? escapeHtml(getStoreSeparator(store)) : '-'}</td>
+                  <td><span class="tag danger">Conciliação pendente</span></td>
+                </tr>
+              `).join('') : `<tr><td colspan="4" class="center muted">Todas as lojas possuem rede e separador vinculados.</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -7813,7 +9307,10 @@ function renderLojas() {
             </label>
             <label>Rede
               <input type="text" name="network" list="redes-cadastradas" placeholder="Ex.: BRETAS" required />
-              <datalist id="redes-cadastradas">${networks.map((network) => `<option value="${network}"></option>`).join('')}</datalist>
+              <datalist id="redes-cadastradas">${networks.map((network) => `<option value="${escapeHtml(network)}"></option>`).join('')}</datalist>
+            </label>
+            <label>Separador
+              <input type="text" name="separator" list="separadores-cadastrados" placeholder="Ex.: Matheus" />
             </label>
             <label>Rota / motorista
               <select name="routeId" required>
@@ -8159,7 +9656,7 @@ function renderUsuarios() {
             <thead><tr><th>Perfil</th><th>O que visualiza</th></tr></thead>
             <tbody>
               <tr><td>ADM</td><td>Todas as abas, usuários, configurações e dados gerais.</td></tr>
-              <tr><td>CD</td><td>Somente saídas, retornos, pendências e Dashboard do CD.</td></tr>
+              <tr><td>CD</td><td>Saídas, resumo de envios, retornos, pendências e Dashboard do CD. O ADM define se cada usuário pode lançar folhagens, bandejas ou ambos.</td></tr>
               <tr><td>Motorista</td><td>Somente entregas, recolhimentos, divergências e pendências da rota vinculada.</td></tr>
               <tr><td>Promotor</td><td>Somente recebimento, estoque, inventário e pendências da própria loja.</td></tr>
               <tr><td>Visualizador</td><td>Visão gerencial concentrada na Dashboard.</td></tr>
@@ -8203,6 +9700,10 @@ function renderUsuarios() {
                 ${buildRouteOptions('')}
               </select>
             </label>
+            <div id="novo-usuario-box-wrap" class="hidden">
+              <strong>Caixas que pode lançar</strong>
+              ${renderBoxTypePermissionChecks('', BOX_TYPES.map((item) => item.key), 'new-user-box-permission')}
+            </div>
           </div>
 
           <div class="form-actions">
@@ -8261,6 +9762,7 @@ function renderUsuarios() {
                   <td data-label="Permissão">
                     <small class="muted">${getPermissionLabel(user)}</small>
                     ${renderUserPermissionControls(user)}
+                    ${user.role === 'cd' ? `<div class="box-permissions-block"><strong>Caixas permitidas</strong>${renderBoxTypePermissionChecks(user.id, user.allowedBoxTypes || BOX_TYPES.map((item) => item.key))}</div>` : ''}
                   </td>
                   <td data-label="Ação"><button type="button" class="btn btn-secondary btn-save-user" data-user-id="${user.id}">Salvar alterações</button></td>
                 </tr>
@@ -8330,6 +9832,7 @@ function bindViewEvents() {
     });
   });
   if (currentView === 'saidas') bindSaidasEvents();
+  if (currentView === 'resumoEnvios') bindResumoEnviosEvents();
   if (currentView === 'entregasMotorista') bindEntregasMotoristaEvents();
   if (currentView === 'recebimentos') bindRecebimentosEvents();
   if (currentView === 'recolhimentos') bindRecolhimentosEvents();
@@ -8377,11 +9880,50 @@ function bindEstornosEvents() {
   });
 }
 
+function bindResumoEnviosEvents() {
+  const form = document.getElementById('form-resumo-envios');
+  if (!form) return;
+
+  form.addEventListener('change', () => {
+    viewFilters.resumoEnviosDate = form.date?.value || todayStr();
+    viewFilters.resumoEnviosNetwork = form.network?.value || '';
+    viewFilters.resumoEnviosCdUserId = form.cdUserId?.value || '';
+    render();
+  });
+}
+
 function bindSaidasEvents() {
   const form = document.getElementById('form-saida');
+  const networkSelect = document.getElementById('saida-network');
+  const separatorSelect = document.getElementById('saida-separator');
   const storeSelect = document.getElementById('saida-store');
   const infoBox = document.getElementById('saida-rota-info');
   const resetBtn = document.getElementById('btn-reset-saida');
+
+  if (!form || !storeSelect) return;
+
+  const getPendingStoresForForm = () => {
+    const date = form.querySelector('[name="date"]').value || todayStr();
+    const network = networkSelect?.value || '';
+    const separator = separatorSelect?.value || '';
+    return [...appState.stores]
+      .filter((store) => !network || inferStoreNetwork(store) === network)
+      .filter((store) => !separator || getStoreSeparator(store) === separator)
+      .filter((store) => !hasOutboundForStoreDate(store.id, date))
+      .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+  };
+
+  const refreshStoreOptions = () => {
+    const selected = storeSelect.value;
+    const stores = getPendingStoresForForm();
+    storeSelect.innerHTML = `<option value="">Selecione a loja</option>` + stores
+      .map((store) => `<option value="${store.id}" ${store.id === selected ? 'selected' : ''}>${escapeHtml(getStoreOptionLabel(store))}</option>`)
+      .join('');
+    if (selected && !stores.some((store) => store.id === selected)) {
+      storeSelect.value = '';
+    }
+    refreshRouteInfo();
+  };
 
   const refreshRouteInfo = () => {
     if (!form || !storeSelect || !infoBox) return;
@@ -8389,7 +9931,10 @@ function bindSaidasEvents() {
     const date = form.querySelector('[name="date"]').value || todayStr();
 
     if (!store) {
-      infoBox.innerHTML = 'Selecione uma loja.';
+      const pendingCount = getPendingStoresForForm().length;
+      infoBox.innerHTML = pendingCount
+        ? `Selecione uma loja. Pendentes para lançamento: <strong>${pendingCount}</strong>.`
+        : 'Nenhuma loja pendente para a rede/data selecionada.';
       return;
     }
 
@@ -8397,37 +9942,34 @@ function bindSaidasEvents() {
     const route = getRouteById(routeId);
     const driverId = routeId ? getEffectiveDriver(routeId, date, store.id) : null;
     const driver = getUserById(driverId);
-    const day = new Date(`${date}T12:00:00`).getDay();
-    const hasException = appState.movements.routeExceptions.some((item) => item.storeId === store.id && item.date === date);
-    const routeType = hasException ? 'Troca temporária cadastrada' : (day === 0 && store.sundayRouteId ? 'Rota de domingo' : 'Rota normal/fixa');
 
     if (!route) {
       infoBox.innerHTML = `
-        <strong>${store.name}</strong><br>
-        <span class="tag danger">Sem rota cadastrada</span><br>
-        Sem rota cadastrada.
+        <strong>${formatStoreNameForUser(store.name)}</strong><br>
+        <span class="tag danger">Sem rota cadastrada</span>
       `;
       return;
     }
 
     infoBox.innerHTML = `
-      <strong>${store.name}</strong><br>
+      <strong>${formatStoreNameForUser(store.name)}</strong> • Rede ${inferStoreNetwork(store)}, Loja ${getStoreUnitName(store)}<br>
+      Separador: <strong>${getStoreSeparator(store) || 'Não conciliado'}</strong><br>
       Rota: <strong>${route.name}</strong> • Motorista: <strong>${driver?.name || 'Sem motorista'}</strong>
     `;
   };
 
-  if (!form || !storeSelect) return;
-
+  networkSelect?.addEventListener('change', refreshStoreOptions);
+  separatorSelect?.addEventListener('change', refreshStoreOptions);
   storeSelect.addEventListener('change', refreshRouteInfo);
-  form.querySelector('[name="date"]').addEventListener('change', refreshRouteInfo);
+  form.querySelector('[name="date"]').addEventListener('change', refreshStoreOptions);
 
   resetBtn.addEventListener('click', () => {
     form.reset();
     form.querySelector('[name="date"]').value = todayStr();
-    refreshRouteInfo();
+    refreshStoreOptions();
   });
 
-  refreshRouteInfo();
+  refreshStoreOptions();
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -8438,6 +9980,11 @@ function bindSaidasEvents() {
 
     if (!storeId) {
       showToast('Selecione a loja para registrar a saída.', 'error');
+      return;
+    }
+    if (hasOutboundForStoreDate(storeId, date)) {
+      showToast('Esta loja já teve saída lançada nessa data.', 'error');
+      refreshStoreOptions();
       return;
     }
     if (!routeId) {
@@ -8465,6 +10012,7 @@ function bindSaidasEvents() {
     }
   });
 }
+
 function bindEntregasMotoristaEvents() {
   const form = document.getElementById('form-entrega-motorista');
   if (!form) return;
@@ -8607,6 +10155,7 @@ function bindRecebimentosEvents() {
 function bindRecolhimentosEvents() {
   const form = document.getElementById('form-recolhimento');
   const routeSelect = document.getElementById('pickup-route');
+  const networkSelect = document.getElementById('pickup-network');
   const driverSelect = document.getElementById('pickup-driver');
   const storeSelect = document.getElementById('pickup-store');
   const info = document.getElementById('pickup-stock-info');
@@ -8624,8 +10173,12 @@ function bindRecolhimentosEvents() {
   const refreshStores = () => {
     const date = form.date.value || todayStr();
     const routeId = routeSelect.value;
-    const allowedStores = appState.stores.filter((store) => getEffectiveRoute(store.id, date) === routeId);
-    storeSelect.innerHTML = `<option value="">Selecione</option>` + allowedStores.map((store) => `<option value="${store.id}">${store.name}</option>`).join('');
+    const network = networkSelect?.value || '';
+    const allowedStores = appState.stores
+      .filter((store) => getEffectiveRoute(store.id, date) === routeId)
+      .filter((store) => !network || inferStoreNetwork(store) === network)
+      .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+    storeSelect.innerHTML = `<option value="">Selecione</option>` + allowedStores.map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('');
     refreshDriver();
   };
 
@@ -8646,6 +10199,7 @@ function bindRecolhimentosEvents() {
   };
 
   routeSelect.addEventListener('change', refreshStores);
+  networkSelect?.addEventListener('change', refreshStores);
   form.date.addEventListener('change', refreshStores);
   storeSelect.addEventListener('change', refreshStoreInfo);
   refreshStores();
@@ -8672,6 +10226,7 @@ function bindCaixasOcupadasEvents() {
   const form = document.getElementById('form-caixas-ocupadas');
   if (!form) return;
   const routeSelect = document.getElementById('occupied-route');
+  const networkSelect = document.getElementById('occupied-network');
   const driverSelect = document.getElementById('occupied-driver');
   const storeSelect = document.getElementById('occupied-store');
   const info = document.getElementById('occupied-store-info');
@@ -8689,11 +10244,15 @@ function bindCaixasOcupadasEvents() {
   const refreshStores = () => {
     const date = form.date.value || todayStr();
     const routeId = routeSelect.value;
-    let stores = appState.stores.filter((store) => getEffectiveRoute(store.id, date) === routeId);
+    const network = networkSelect?.value || '';
+    let stores = appState.stores
+      .filter((store) => getEffectiveRoute(store.id, date) === routeId)
+      .filter((store) => !network || inferStoreNetwork(store) === network);
     if (currentUser.role === 'driver') {
       stores = stores.filter((store) => canUserSeeStore(store.id, currentUser, date, appState));
     }
-    storeSelect.innerHTML = `<option value="">Selecione</option>` + stores.map((store) => `<option value="${store.id}">${store.name}</option>`).join('');
+    stores.sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+    storeSelect.innerHTML = `<option value="">Selecione</option>` + stores.map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('');
     refreshDriver();
     refreshStoreInfo();
   };
@@ -8714,6 +10273,7 @@ function bindCaixasOcupadasEvents() {
   };
 
   routeSelect.addEventListener('change', refreshStores);
+  networkSelect?.addEventListener('change', refreshStores);
   storeSelect.addEventListener('change', refreshStoreInfo);
   form.date.addEventListener('change', refreshStores);
   refreshStores();
@@ -8943,6 +10503,8 @@ function bindRotasEvents() {
   }
 
   const form = document.getElementById('form-excecao-rota');
+  const exceptionNetworkSelect = document.getElementById('excecao-rota-network');
+  const exceptionStoreSelect = document.getElementById('excecao-rota-store');
   const routeSelect = document.getElementById('nova-rota-select');
   const driverSelect = document.getElementById('nova-rota-driver');
 
@@ -8958,6 +10520,24 @@ function bindRotasEvents() {
     }
   };
 
+
+  const refreshExceptionStoreOptions = () => {
+    if (!exceptionStoreSelect) return;
+    const selected = exceptionStoreSelect.value;
+    const network = exceptionNetworkSelect?.value || '';
+    const stores = [...appState.stores]
+      .filter((store) => !network || inferStoreNetwork(store) === network)
+      .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+    exceptionStoreSelect.innerHTML = `<option value="">Selecione</option>` + stores
+      .map((store) => `<option value="${store.id}" ${store.id === selected ? 'selected' : ''}>${escapeHtml(getStoreOptionLabel(store))}</option>`)
+      .join('');
+    if (selected && !stores.some((store) => store.id === selected)) {
+      exceptionStoreSelect.value = '';
+    }
+  };
+
+  exceptionNetworkSelect?.addEventListener('change', refreshExceptionStoreOptions);
+  refreshExceptionStoreOptions();
   routeSelect.addEventListener('change', refreshDriver);
   refreshDriver();
 
@@ -8985,11 +10565,13 @@ function bindUsuariosEvents() {
   const roleSelect = document.getElementById('novo-usuario-role');
   const storeWrap = document.getElementById('novo-usuario-store-wrap');
   const routeWrap = document.getElementById('novo-usuario-route-wrap');
+  const boxWrap = document.getElementById('novo-usuario-box-wrap');
 
   const refreshTargetFields = () => {
     if (!roleSelect || !storeWrap || !routeWrap) return;
     storeWrap.classList.toggle('hidden', roleSelect.value !== 'promoter');
     routeWrap.classList.toggle('hidden', roleSelect.value !== 'driver');
+    boxWrap?.classList.toggle('hidden', roleSelect.value !== 'cd');
   };
 
   if (roleSelect) {
@@ -9007,6 +10589,7 @@ function bindUsuariosEvents() {
         password: form.password.value,
         storeId: form.storeId?.value || '',
         routeId: form.routeId?.value || '',
+        allowedBoxTypes: Array.from(document.querySelectorAll('.new-user-box-permission:checked')).map((item) => item.value),
       };
       const result = await persistMutation('CREATE_USER', payload, 'Usuário criado com sucesso.');
       if (result.ok) render();
@@ -9042,6 +10625,7 @@ function bindUsuariosEvents() {
         storeId: document.querySelector(`.user-store-select[data-user-id="${userId}"]`)?.value || '',
         routeId: document.querySelector(`.user-route-select[data-user-id="${userId}"]`)?.value || '',
         allowedViews: Array.from(document.querySelectorAll(`.user-view-permission[data-user-id="${userId}"]:checked`)).map((item) => item.value),
+        allowedBoxTypes: Array.from(document.querySelectorAll(`.user-box-permission[data-user-id="${userId}"]:checked`)).map((item) => item.value),
       };
       const result = await persistMutation('UPDATE_USER_ACCOUNT', payload, 'Usuário atualizado com sucesso.');
       if (result.ok) render();
@@ -9059,6 +10643,28 @@ function bindLojasEvents() {
     });
   }
 
+  const conciliationForm = document.getElementById('form-conciliacao-loja');
+  if (conciliationForm) {
+    const storeSelect = conciliationForm.storeId;
+    const fillConciliationFields = () => {
+      const store = getStoreById(storeSelect.value);
+      if (!store) return;
+      conciliationForm.network.value = store.network || inferStoreNetwork(store) || '';
+      conciliationForm.separator.value = getStoreSeparator(store) || '';
+    };
+    storeSelect.addEventListener('change', fillConciliationFields);
+    conciliationForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const payload = {
+        storeId: conciliationForm.storeId.value,
+        network: conciliationForm.network.value,
+        separator: conciliationForm.separator.value,
+      };
+      const result = await persistMutation('UPDATE_STORE_LINKS', payload, 'Conciliação salva com sucesso.');
+      if (result.ok) render();
+    });
+  }
+
   const form = document.getElementById('form-nova-loja');
   if (form) {
     form.addEventListener('submit', async (event) => {
@@ -9067,6 +10673,7 @@ function bindLojasEvents() {
         name: form.name.value,
         network: form.network.value,
         routeId: form.routeId.value,
+        separator: form.separator?.value || '',
         highStockLimit: form.highStockLimit.value,
         notes: form.notes.value,
       };
@@ -9192,6 +10799,24 @@ function bindInventarioEvents() {
 
   const formMandatory = document.getElementById('form-programar-inventario');
   if (formMandatory) {
+    const mandatoryNetwork = document.getElementById('mandatory-inventory-network');
+    const mandatoryStore = document.getElementById('mandatory-inventory-store');
+    const refreshMandatoryStoreOptions = () => {
+      if (!mandatoryStore) return;
+      const selected = mandatoryStore.value;
+      const network = mandatoryNetwork?.value || '';
+      const stores = [...appState.stores]
+        .filter((store) => !network || inferStoreNetwork(store) === network)
+        .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+      mandatoryStore.innerHTML = `<option value="">Selecione</option>` + stores
+        .map((store) => `<option value="${store.id}" ${store.id === selected ? 'selected' : ''}>${escapeHtml(getStoreOptionLabel(store))}</option>`)
+        .join('');
+      if (selected && !stores.some((store) => store.id === selected)) {
+        mandatoryStore.value = '';
+      }
+    };
+    mandatoryNetwork?.addEventListener('change', refreshMandatoryStoreOptions);
+    refreshMandatoryStoreOptions();
     formMandatory.addEventListener('submit', async (event) => {
       event.preventDefault();
       const payload = {
@@ -9222,6 +10847,7 @@ function bindInventarioEvents() {
   }
 
   const formStore = document.getElementById('form-inventario-loja');
+  const storeNetworkSelect = document.getElementById('inventario-store-network');
   const storeSelect = document.getElementById('inventario-store');
   const storeInfo = document.getElementById('inventario-store-current');
   const refreshStoreInventory = () => {
@@ -9240,9 +10866,26 @@ function bindInventarioEvents() {
     `;
     fillQtyInputs('inventario-loja', qty);
   };
-  if (formStore && storeSelect) {
-    storeSelect.addEventListener('change', refreshStoreInventory);
+
+  const refreshInventoryStoreOptions = () => {
+    if (!formStore || !storeSelect) return;
+    const selected = storeSelect.value;
+    const network = storeNetworkSelect?.value || '';
+    const stores = [...appState.stores]
+      .filter((store) => !network || inferStoreNetwork(store) === network)
+      .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+    storeSelect.innerHTML = `<option value="">Selecione</option>` + stores
+      .map((store) => `<option value="${store.id}" ${store.id === selected ? 'selected' : ''}>${escapeHtml(getStoreOptionLabel(store))}</option>`)
+      .join('');
+    if (selected && !stores.some((store) => store.id === selected)) {
+      storeSelect.value = '';
+    }
     refreshStoreInventory();
+  };
+  if (formStore && storeSelect) {
+    storeNetworkSelect?.addEventListener('change', refreshInventoryStoreOptions);
+    storeSelect.addEventListener('change', refreshStoreInventory);
+    refreshInventoryStoreOptions();
     formStore.addEventListener('submit', async (event) => {
       event.preventDefault();
       const payload = {

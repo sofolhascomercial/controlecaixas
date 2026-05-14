@@ -1022,3 +1022,21 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   width:auto;
   accent-color:var(--green-700);
 }
+
+.qty-box.disabled-box{
+  opacity:.65;
+  background:#f3f5f3;
+}
+.qty-box.disabled-box input{
+  cursor:not-allowed;
+  background:#eef2ef;
+}
+.box-permissions-block{
+  margin-top:10px;
+  padding-top:10px;
+  border-top:1px solid var(--line);
+}
+.permissions-grid.compact{
+  max-height:none;
+  margin-top:6px;
+}
