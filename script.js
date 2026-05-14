@@ -9,8 +9,17 @@
    ============================================================ */
 
 const APP_CONFIG = {
-  USE_FIREBASE: false,
-  FIREBASE_CONFIG: null,
+  USE_FIREBASE: true,
+  FIREBASE_CONFIG: {
+    apiKey: "AIzaSyBSMnSTQdj26Nd1IeulkLY5_FFhxSzsxw0",
+    authDomain: "controle-de-caixas-61325.firebaseapp.com",
+    databaseURL: "https://controle-de-caixas-61325-default-rtdb.firebaseio.com/",
+    projectId: "controle-de-caixas-61325",
+    storageBucket: "controle-de-caixas-61325.firebasestorage.app",
+    messagingSenderId: "821543178927",
+    appId: "1:821543178927:web:f354626f1115dff9877a5a",
+    measurementId: "G-R5461FE4J7"
+  },
   FIREBASE_PATH: 'sofolhasCaixasApp/root',
 };
 

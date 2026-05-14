@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "sofolhasCaixasApp": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}
