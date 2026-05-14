@@ -977,3 +977,48 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   .responsible-group{padding:10px;margin:10px 0}
   .inline-actions .btn{width:100%}
 }
+
+.locked-date-input{
+  background:#f3f7f4;
+  color:var(--text);
+  cursor:not-allowed;
+}
+
+.mandatory-pending-list{display:grid;gap:12px}
+.mandatory-pending-group{border:1px solid #edf1ee;border-radius:16px;background:#fff;overflow:hidden}
+.mandatory-pending-group summary{cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;font-weight:700}
+.mandatory-pending-group summary small{color:var(--muted);font-weight:600}
+.mandatory-pending-group .table-wrap{border-top:1px solid #edf1ee}
+@media(max-width:720px){.mandatory-pending-group summary{align-items:flex-start;flex-direction:column}.btn-cancel-mandatory-pending{width:100%}}
+
+/* Permissões por usuário */
+.permissions-details{
+  margin-top:8px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:8px 10px;
+  background:#fbfdfb;
+}
+.permissions-details summary{
+  cursor:pointer;
+  font-weight:800;
+  color:var(--green-900);
+}
+.permissions-grid{
+  display:grid;
+  gap:7px;
+  margin-top:10px;
+  max-height:220px;
+  overflow:auto;
+}
+.permission-check{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-weight:600;
+  font-size:.88rem;
+}
+.permission-check input{
+  width:auto;
+  accent-color:var(--green-700);
+}

@@ -3074,6 +3074,8 @@ const VIEW_META = {
   entregasMotorista: { title: 'Entrega do Motorista', subtitle: 'Validação do total deixado na loja pelo motorista' },
   recebimentos: { title: 'Recebimento na Loja', subtitle: 'Confirmação do promotor com comparação automática' },
   recolhimentos: { title: 'Recolhimentos', subtitle: 'Registro do motorista com trava de saldo por loja' },
+  caixasOcupadas: { title: 'Caixas Ocupadas', subtitle: 'Caixas em loja que não puderam ser recolhidas pelo motorista' },
+  caixasLiberadas: { title: 'Caixas Liberadas', subtitle: 'Status das caixas liberadas ou ocupadas informado pela loja' },
   retornos: { title: 'Retornos no CD', subtitle: 'Conferência do total que voltou no caminhão' },
   estoque: { title: 'Estoque em Loja', subtitle: 'Saldos acumulados por loja com alertas de estoque alto' },
   inventario: { title: 'Inventário', subtitle: 'Correção oficial dos saldos físicos de caixas' },
@@ -3097,6 +3099,8 @@ const NAV_ITEMS = [
   { key: 'entregasMotorista', label: 'Entrega do Motorista', roles: ['admin', 'driver'] },
   { key: 'recebimentos', label: 'Recebimento na Loja', roles: ['admin', 'promoter'] },
   { key: 'recolhimentos', label: 'Recolhimentos', roles: ['admin', 'driver'] },
+  { key: 'caixasOcupadas', label: 'Caixas Ocupadas', roles: ['admin', 'driver'] },
+  { key: 'caixasLiberadas', label: 'Caixas Liberadas', roles: ['admin', 'driver', 'promoter'] },
   { key: 'retornos', label: 'Retornos no CD', roles: ['admin', 'cd'] },
   { key: 'estoque', label: 'Estoque em Loja', roles: ['admin', 'driver', 'promoter'] },
   { key: 'inventario', label: 'Inventário', roles: ['admin', 'driver', 'promoter'] },
@@ -3117,8 +3121,8 @@ const NAV_ITEMS = [
 const MOBILE_PRIORITY_BY_ROLE = {
   admin: ['dashboard', 'pendencias', 'fechamento', 'divergencias'],
   cd: ['dashboard', 'saidas', 'retornos', 'pendencias'],
-  driver: ['dashboard', 'entregasMotorista', 'recolhimentos', 'pendencias'],
-  promoter: ['dashboard', 'recebimentos', 'pendencias', 'estoque'],
+  driver: ['dashboard', 'entregasMotorista', 'recolhimentos', 'caixasOcupadas'],
+  promoter: ['dashboard', 'recebimentos', 'caixasLiberadas', 'pendencias'],
   viewer: ['dashboard', 'estoque', 'divergencias'],
 };
 
@@ -3128,6 +3132,8 @@ const MOBILE_ICON_BY_VIEW = {
   entregasMotorista: '🚚',
   recebimentos: '✅',
   recolhimentos: '↩️',
+  caixasOcupadas: '🚧',
+  caixasLiberadas: '✅',
   retornos: '🏭',
   estoque: '📊',
   inventario: '🧾',
@@ -3497,7 +3503,30 @@ function normalizeUserRecord(user) {
   normalized.password = String(normalized.password || INITIAL_PASSWORD);
   normalized.passwordChangedAt = normalized.passwordChangedAt || null;
   normalized.forcePasswordChange = normalized.forcePasswordChange === false ? false : !normalized.passwordChangedAt && normalized.password === INITIAL_PASSWORD;
+  normalized.allowedViews = normalizeAllowedViewsForRole(normalized.role, normalized.allowedViews);
   return normalized;
+}
+
+function getDefaultViewPermissionsForRole(role) {
+  return NAV_ITEMS
+    .filter((item) => item.roles.includes(role))
+    .map((item) => item.key);
+}
+
+function normalizeAllowedViewsForRole(role, allowedViews) {
+  const defaults = getDefaultViewPermissionsForRole(role);
+  if (!Array.isArray(allowedViews) || !allowedViews.length) return null;
+  const allowedSet = new Set(defaults);
+  const views = [...new Set(allowedViews)].filter((view) => allowedSet.has(view));
+  if (allowedSet.has('dashboard') && !views.includes('dashboard')) views.unshift('dashboard');
+  return views.length ? views : null;
+}
+
+function getEffectiveAllowedViews(user) {
+  if (!user) return [];
+  const defaults = getDefaultViewPermissionsForRole(user.role);
+  if (user.role === 'admin') return defaults;
+  return normalizeAllowedViewsForRole(user.role, user.allowedViews) || defaults;
 }
 
 function mustChangePassword(user) {
@@ -3508,8 +3537,9 @@ function mustChangePassword(user) {
 function canAccessView(viewKey, user = currentUser) {
   const item = NAV_ITEMS.find((nav) => nav.key === viewKey);
   if (!item || !user || !item.roles.includes(user.role)) return false;
-  if (viewKey === 'cargaGoiania' && user.role === 'driver') return isGoianiaTrunkUser(user);
-  if (viewKey === 'distribuicaoGoiania' && user.role === 'driver') return isGoianiaTrunkUser(user);
+  if (viewKey === 'cargaGoiania' && user.role === 'driver' && !isGoianiaTrunkUser(user)) return false;
+  if (viewKey === 'distribuicaoGoiania' && user.role === 'driver' && !isGoianiaTrunkUser(user)) return false;
+  if (user.role !== 'admin' && Array.isArray(user.allowedViews) && user.allowedViews.length && !getEffectiveAllowedViews(user).includes(viewKey)) return false;
   return true;
 }
 
@@ -3602,6 +3632,8 @@ function ensureStateShape(state) {
   base.movements.goianiaTransfers = Array.isArray(base.movements.goianiaTransfers) ? base.movements.goianiaTransfers : [];
   base.movements.routeExceptions = Array.isArray(base.movements.routeExceptions) ? base.movements.routeExceptions : [];
   base.movements.inventories = Array.isArray(base.movements.inventories) ? base.movements.inventories : [];
+  base.movements.occupiedBoxes = Array.isArray(base.movements.occupiedBoxes) ? base.movements.occupiedBoxes : [];
+  base.movements.releasedBoxes = Array.isArray(base.movements.releasedBoxes) ? base.movements.releasedBoxes : [];
 
   base.movements.outbounds = base.movements.outbounds.map((item) => ({
     ...item,
@@ -3636,6 +3668,18 @@ function ensureStateShape(state) {
     countedQty: sanitizeQty(item.countedQty),
     diffQty: item.diffQty || qtyDiff(sanitizeQty(item.countedQty), sanitizeQty(item.previousQty)),
   }));
+  base.movements.occupiedBoxes = base.movements.occupiedBoxes.map((item) => ({
+    ...item,
+    totalQty: safeInt(item.totalQty),
+    status: item.status || 'aberta',
+  }));
+  base.movements.releasedBoxes = base.movements.releasedBoxes.map((item) => ({
+    ...item,
+    totalInStore: safeInt(item.totalInStore),
+    freeQty: safeInt(item.freeQty),
+    occupiedQty: safeInt(item.occupiedQty),
+    status: item.status || 'registrado',
+  }));
 
   base.divergences = Array.isArray(base.divergences) ? base.divergences : [];
   base.audit = Array.isArray(base.audit) ? base.audit : [];
@@ -3644,6 +3688,7 @@ function ensureStateShape(state) {
     ...item,
     storeIds: Array.isArray(item.storeIds) ? item.storeIds : [],
     completedStoreIds: Array.isArray(item.completedStoreIds) ? item.completedStoreIds : [],
+    canceledStoreIds: Array.isArray(item.canceledStoreIds) ? item.canceledStoreIds : [],
     status: item.status || 'ativa',
   })) : [];
   base.settings = base.settings || {
@@ -3694,6 +3739,8 @@ function ensureStateShape(state) {
   base.movements.pickups = base.movements.pickups.filter((item) => (!item.storeId || validStoreIds.has(item.storeId)) && (!item.routeId || validRouteIds.has(item.routeId)));
   base.movements.returns = base.movements.returns.filter((item) => !item.routeId || validRouteIds.has(item.routeId));
   base.movements.routeExceptions = base.movements.routeExceptions.filter((item) => (!item.storeId || validStoreIds.has(item.storeId)) && (!item.newRouteId || validRouteIds.has(item.newRouteId)));
+  base.movements.occupiedBoxes = base.movements.occupiedBoxes.filter((item) => (!item.storeId || validStoreIds.has(item.storeId)) && (!item.routeId || validRouteIds.has(item.routeId)));
+  base.movements.releasedBoxes = base.movements.releasedBoxes.filter((item) => (!item.storeId || validStoreIds.has(item.storeId)) && (!item.routeId || validRouteIds.has(item.routeId)));
   base.divergences = base.divergences.filter((item) => (!item.storeId || validStoreIds.has(item.storeId)) && (!item.routeId || validRouteIds.has(item.routeId)));
 
   return base;
@@ -3731,6 +3778,8 @@ function createSeedState() {
       goianiaTransfers: [],
       routeExceptions: [],
       inventories: [],
+      occupiedBoxes: [],
+      releasedBoxes: [],
     },
     divergences: [],
     audit: [],
@@ -3952,6 +4001,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     target.name = role === 'promoter' && payload.storeId ? formatStoreNameForUser(getStoreById(payload.storeId, state)?.name || name) : name;
     target.role = role;
     target.username = username;
+    target.allowedViews = normalizeAllowedViewsForRole(role, payload.allowedViews);
 
     delete target.storeId;
     delete target.routeId;
@@ -4261,6 +4311,72 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     audit('Recebimento na Loja', 'Confirmação de recebimento', `Loja ${getStoreById(outbound.storeId, state)?.name || '-'} confirmou ${sumQty(qty)} caixas.`);
   }
 
+
+  if (type === 'CREATE_OCCUPIED_BOXES') {
+    if (!['admin', 'driver'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou motorista pode registrar caixas ocupadas.' };
+    const date = payload.date || todayStr();
+    if (actor.role === 'driver' && String(payload.driverId) !== actor.id) return { ok: false, error: 'Motorista só pode registrar caixas ocupadas no próprio acesso.' };
+    if (actor.role === 'driver' && !canUserSeeStore(payload.storeId, actor, date, state)) return { ok: false, error: 'Motorista só pode registrar lojas da própria rota/carga.' };
+    const store = getStoreById(payload.storeId, state);
+    if (!store) return { ok: false, error: 'Selecione uma loja válida.' };
+    const routeId = payload.routeId || getEffectiveRoute(payload.storeId, date, state);
+    const driverId = payload.driverId || getRouteById(routeId, state)?.driverId || actor.id;
+    const totalQty = safeInt(payload.totalQty);
+    const usedFor = String(payload.usedFor || '').trim();
+    if (totalQty <= 0) return { ok: false, error: 'Informe a quantidade de caixas ocupadas.' };
+    if (!usedFor) return { ok: false, error: 'Informe com o que as caixas estão sendo usadas.' };
+    state.movements.occupiedBoxes.unshift({
+      id: randomId('occ'),
+      date,
+      routeId,
+      driverId,
+      storeId: payload.storeId,
+      totalQty,
+      usedFor,
+      notes: String(payload.notes || '').trim(),
+      status: 'aberta',
+      createdBy: actor.name,
+      createdById: actor.id,
+      createdAt: nowIso(),
+    });
+    audit('Caixas Ocupadas', 'Alerta registrado', `${store.name} está com ${totalQty} caixas ocupadas. Uso informado: ${usedFor}.`);
+  }
+
+  if (type === 'CREATE_RELEASED_BOXES') {
+    if (!['admin', 'promoter'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou promotor pode registrar caixas liberadas.' };
+    const date = payload.date || todayStr();
+    const storeId = payload.storeId || actor.storeId;
+    const store = getStoreById(storeId, state);
+    if (!store) return { ok: false, error: 'Selecione uma loja válida.' };
+    if (actor.role === 'promoter' && storeId !== actor.storeId) return { ok: false, error: 'Promotor só pode lançar caixas da própria loja.' };
+    const totalInStore = safeInt(payload.totalInStore);
+    const freeQty = safeInt(payload.freeQty);
+    const occupiedQty = safeInt(payload.occupiedQty);
+    if (totalInStore < 0 || freeQty < 0 || occupiedQty < 0) return { ok: false, error: 'As quantidades não podem ser negativas.' };
+    if (freeQty + occupiedQty !== totalInStore) {
+      return { ok: false, error: 'A soma de caixas liberadas e ocupadas precisa ser igual ao total informado na loja.' };
+    }
+    const routeId = getEffectiveRoute(storeId, date, state);
+    const driverId = routeId ? getEffectiveDriver(routeId, date, storeId, state) : null;
+    state.movements.releasedBoxes.unshift({
+      id: randomId('rel'),
+      date,
+      storeId,
+      routeId,
+      driverId,
+      totalInStore,
+      freeQty,
+      occupiedQty,
+      notes: String(payload.notes || '').trim(),
+      status: 'registrado',
+      createdBy: actor.name,
+      createdById: actor.id,
+      createdAt: nowIso(),
+    });
+    audit('Caixas Liberadas', 'Status informado pela loja', `${store.name}: ${freeQty} liberadas, ${occupiedQty} ocupadas, total ${totalInStore}.`);
+  }
+
+
   if (type === 'CREATE_PICKUP') {
     if (!['admin', 'driver'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou motorista pode registrar recolhimento.' };
     if (actor.role === 'driver' && String(payload.driverId) !== actor.id) return { ok: false, error: 'Motorista só pode registrar recolhimento no próprio acesso.' };
@@ -4269,12 +4385,15 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (totalQty <= 0) return { ok: false, error: 'Informe a quantidade recolhida.' };
 
     const storeStock = getStoreStock(payload.storeId, state);
-    if (totalQty > sumQty(storeStock)) {
-      return { ok: false, error: 'Recolhimento inválido. O saldo total da loja é menor do que a quantidade informada.' };
+    const availableTotal = sumQty(storeStock);
+    const isAboveAvailable = totalQty > availableTotal;
+    if (isAboveAvailable && !String(payload.justification || '').trim()) {
+      return { ok: false, error: 'Mesmo sem saldo suficiente na loja, o recolhimento pode ser registrado, mas a justificativa é obrigatória.' };
     }
 
     const qty = buildQtyFromTotal(totalQty, storeStock);
-    state.storeStocks[payload.storeId] = subQty(storeStock, qty);
+    const stockQtyToRemove = buildQtyFromTotal(Math.min(totalQty, availableTotal), storeStock);
+    state.storeStocks[payload.storeId] = subQty(storeStock, stockQtyToRemove);
     state.movements.pickups.unshift({
       id: randomId('pick'),
       date: payload.date || todayStr(),
@@ -4284,6 +4403,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       qty,
       totalOnly: true,
       totalQty,
+      availableAtPickup: availableTotal,
+      aboveAvailable: isAboveAvailable,
       justification: payload.justification || '',
       createdBy: actor.name,
       createdAt: nowIso(),
@@ -4476,6 +4597,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       network: payload.network || null,
       storeIds,
       completedStoreIds: [],
+      canceledStoreIds: [],
       notes: String(payload.notes || '').trim(),
       status: 'ativa',
       createdBy: actor.name,
@@ -4483,6 +4605,44 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       createdAt: nowIso(),
     });
     audit('Inventário', 'Inventário obrigatório programado', `${formatDateBR(date)} para ${label}: ${storeIds.length} loja(s).`);
+  }
+
+
+  if (type === 'CANCEL_MANDATORY_INVENTORY_PENDING') {
+    if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode cancelar pendência de inventário obrigatório.' };
+    const schedule = (state.mandatoryInventories || []).find((item) => item.id === payload.scheduleId);
+    if (!schedule) return { ok: false, error: 'Programação de inventário não encontrada.' };
+    if (schedule.status === 'cancelada') return { ok: false, error: 'Esta programação já foi cancelada.' };
+
+    if (payload.storeId) {
+      const store = getStoreById(payload.storeId, state);
+      if (!store) return { ok: false, error: 'Loja não encontrada.' };
+      const storeIds = getMandatoryInventoryStoreIds(schedule, state);
+      if (!storeIds.includes(store.id)) return { ok: false, error: 'Esta loja não faz parte da programação.' };
+      if (!isMandatoryInventoryPendingForStore(schedule, store.id, state)) {
+        return { ok: false, error: 'Essa loja não possui pendência ativa nesta programação.' };
+      }
+      schedule.canceledStoreIds = Array.isArray(schedule.canceledStoreIds) ? schedule.canceledStoreIds : [];
+      if (!schedule.canceledStoreIds.includes(store.id)) schedule.canceledStoreIds.push(store.id);
+      schedule.lastCanceledAt = nowIso();
+      schedule.lastCanceledBy = actor.name;
+      schedule.lastCancelReason = String(payload.reason || 'Cancelado pelo ADM.').trim();
+
+      const completedIds = new Set(Array.isArray(schedule.completedStoreIds) ? schedule.completedStoreIds : []);
+      const canceledIds = new Set(schedule.canceledStoreIds);
+      const allClosed = storeIds.length > 0 && storeIds.every((id) => completedIds.has(id) || canceledIds.has(id));
+      if (allClosed) {
+        schedule.status = 'concluida';
+        schedule.completedAt = nowIso();
+      }
+      audit('Inventário', 'Pendência de inventário cancelada', `${store.name} teve a pendência de inventário obrigatório de ${formatDateBR(schedule.date)} cancelada pelo ADM. Motivo: ${schedule.lastCancelReason}`);
+    } else {
+      schedule.status = 'cancelada';
+      schedule.canceledAt = nowIso();
+      schedule.canceledBy = actor.name;
+      schedule.cancelReason = String(payload.reason || 'Programação cancelada pelo ADM.').trim();
+      audit('Inventário', 'Programação de inventário cancelada', `Programação de ${formatDateBR(schedule.date)} cancelada pelo ADM. Motivo: ${schedule.cancelReason}`);
+    }
   }
 
   if (type === 'APPLY_INVENTORY') {
@@ -4641,6 +4801,10 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     } else if (movementType === 'pickup') {
       if (movement.returnBatchId) return { ok: false, error: 'Este recolhimento já retornou ao CD. Estorne primeiro o retorno no CD.' };
       state.storeStocks[movement.storeId] = addQty(getStoreStock(movement.storeId, state), movement.qty);
+      Object.assign(movement, cancelInfo);
+    } else if (movementType === 'occupiedBox') {
+      Object.assign(movement, cancelInfo);
+    } else if (movementType === 'releasedBox') {
       Object.assign(movement, cancelInfo);
     } else if (movementType === 'return') {
       state.cdStock = subQty(getCdStock(state), movement.qty);
@@ -4867,6 +5031,8 @@ function renderCurrentView() {
     entregasMotorista: renderEntregasMotorista,
     recebimentos: renderRecebimentos,
     recolhimentos: renderRecolhimentos,
+    caixasOcupadas: renderCaixasOcupadas,
+    caixasLiberadas: renderCaixasLiberadas,
     retornos: renderRetornos,
     estoque: renderEstoque,
     inventario: renderInventario,
@@ -4884,7 +5050,9 @@ function renderCurrentView() {
     configuracoes: renderConfiguracoes,
   };
 
-  els.mainContent.innerHTML = renderers[currentView] ? renderers[currentView]() : renderDashboard();
+  const viewHtml = renderers[currentView] ? renderers[currentView]() : renderDashboard();
+  const globalMandatoryNotice = ['dashboard', 'inventario'].includes(currentView) ? '' : renderMandatoryInventoryNotice(todayStr());
+  els.mainContent.innerHTML = globalMandatoryNotice ? `<div class="stack">${globalMandatoryNotice}${viewHtml}</div>` : viewHtml;
   enhanceMobileTables();
   bindViewEvents();
 }
@@ -5029,10 +5197,11 @@ function getVisibleDivergences(state = appState, user = currentUser) {
 function getPermissionLabel(user, state = appState) {
   if (!user) return '-';
   if (user.role === 'admin') return 'Acesso total ao sistema';
-  if (user.role === 'viewer') return 'Visualização geral somente pela Dashboard';
-  if (user.role === 'cd') return 'CD: saídas, retornos e pendências do CD';
-  if (user.role === 'driver') return `Motorista: somente ${getUserAccessTarget(user, state)}`;
-  if (user.role === 'promoter') return `Promotor: somente ${formatStoreNameForUser(getUserAccessTarget(user, state))}`;
+  const viewCount = getEffectiveAllowedViews(user).length;
+  if (user.role === 'viewer') return `Visualizador: ${viewCount} aba(s) liberada(s)`;
+  if (user.role === 'cd') return `CD: ${viewCount} aba(s) liberada(s)`;
+  if (user.role === 'driver') return `Motorista: ${viewCount} aba(s) liberada(s) • ${getUserAccessTarget(user, state)}`;
+  if (user.role === 'promoter') return `Promotor: ${viewCount} aba(s) liberada(s) • ${formatStoreNameForUser(getUserAccessTarget(user, state))}`;
   return 'Permissão padrão do perfil';
 }
 
@@ -5140,6 +5309,19 @@ function getAllAlerts(state = appState) {
       detail: `Aberta em ${formatDateTimeBR(div.createdAt)}.`,
     });
   });
+
+
+  (state.movements.occupiedBoxes || [])
+    .filter((item) => isActiveMovement(item) && isMovementVisibleToUser(item, currentUser, state))
+    .forEach((item) => {
+      alerts.push({
+        id: item.id,
+        priority: 'warning',
+        title: 'Caixas ocupadas na loja',
+        description: `${getStoreById(item.storeId, state)?.name || 'Loja'} está com ${safeInt(item.totalQty)} caixa(s) impossibilitada(s) de recolhimento.`,
+        detail: `Uso informado: ${item.usedFor || '-'}${item.notes ? ` • Obs.: ${item.notes}` : ''}`,
+      });
+    });
 
   return alerts;
 }
@@ -5435,6 +5617,8 @@ function getMovementKindLabel(type) {
     driverDelivery: 'Entrega do motorista',
     receipt: 'Recebimento da loja',
     pickup: 'Recolhimento',
+    occupiedBox: 'Caixas ocupadas',
+    releasedBox: 'Caixas liberadas',
     return: 'Retorno no CD',
     goianiaLoad: 'Carga Goiânia',
     goianiaTransfer: 'Distribuição Goiânia',
@@ -5449,6 +5633,8 @@ function getMovementByType(type, id, state = appState) {
     driverDelivery: state.movements.driverDeliveries,
     receipt: state.movements.receipts,
     pickup: state.movements.pickups,
+    occupiedBox: state.movements.occupiedBoxes || [],
+    releasedBox: state.movements.releasedBoxes || [],
     return: state.movements.returns,
     goianiaLoad: state.movements.goianiaLoads,
     goianiaTransfer: state.movements.goianiaTransfers,
@@ -5677,7 +5863,8 @@ function isMandatoryInventoryPendingForStore(schedule, storeId, state = appState
   const storeIds = getMandatoryInventoryStoreIds(schedule, state);
   if (!storeIds.includes(storeId)) return false;
   const completedIds = Array.isArray(schedule.completedStoreIds) ? schedule.completedStoreIds : [];
-  if (completedIds.includes(storeId)) return false;
+  const canceledIds = Array.isArray(schedule.canceledStoreIds) ? schedule.canceledStoreIds : [];
+  if (completedIds.includes(storeId) || canceledIds.includes(storeId)) return false;
   const hasInventoryRecord = (state.movements.inventories || []).some((item) =>
     isActiveMovement(item) && item.location === 'store' && item.storeId === storeId && item.date === schedule.date && item.mandatoryInventoryId === schedule.id
   );
@@ -5710,13 +5897,21 @@ function renderMandatoryInventoryNotice(date = todayStr()) {
   const pending = getPendingMandatoryInventoriesForUser(currentUser, date, appState);
   if (!pending.length) return '';
   const isPromoter = currentUser?.role === 'promoter';
-  const title = isPromoter ? 'Inventário obrigatório da sua loja' : 'Inventário obrigatório pendente';
+  const isDriver = currentUser?.role === 'driver';
+  const title = isPromoter
+    ? 'Hoje tem inventário obrigatório da sua loja'
+    : isDriver
+      ? 'Hoje tem inventário obrigatório em loja da sua rota'
+      : 'Inventário obrigatório pendente hoje';
   const stores = pending.slice(0, 6).map((item) => item.store?.name || '-').join(', ');
+  const detail = isPromoter
+    ? 'A mensagem só sai depois que o inventário da loja for realizado.'
+    : `${pending.length} loja(s) pendente(s): ${stores}${pending.length > 6 ? '...' : ''}. A mensagem só sai após a realização.`;
   return `
     <div class="alert-strip critical mandatory-inventory-alert">
       <div>
         <strong>${title}</strong>
-        <div class="muted">Data: ${formatDateBR(date)}. ${isPromoter ? 'A mensagem só sai depois que o inventário for realizado.' : `${pending.length} loja(s) pendente(s): ${stores}${pending.length > 6 ? '...' : ''}`}</div>
+        <div class="muted">Data: ${formatDateBR(date)}. ${detail}</div>
       </div>
       <button class="btn btn-primary btn-go-inventory" type="button">Fazer inventário</button>
     </div>
@@ -5735,7 +5930,8 @@ function markMandatoryInventoriesDoneForStore(storeId, date, state = appState) {
       schedule.completedStoreIds = Array.isArray(schedule.completedStoreIds) ? schedule.completedStoreIds : [];
       if (!schedule.completedStoreIds.includes(storeId)) schedule.completedStoreIds.push(storeId);
       const storeIds = getMandatoryInventoryStoreIds(schedule, state);
-      if (storeIds.length && storeIds.every((id) => schedule.completedStoreIds.includes(id))) {
+      const canceledIds = Array.isArray(schedule.canceledStoreIds) ? schedule.canceledStoreIds : [];
+      if (storeIds.length && storeIds.every((id) => schedule.completedStoreIds.includes(id) || canceledIds.includes(id))) {
         schedule.status = 'concluida';
         schedule.completedAt = nowIso();
       }
@@ -6237,8 +6433,8 @@ function renderRecolhimentos() {
             </div>
           </div>
 
-          <label>Observação
-            <textarea name="justification" placeholder="Ex.: caixas ainda em uso na banca / coleta parcial / loja sem tempo hábil."></textarea>
+          <label>Observação / justificativa
+            <textarea name="justification" placeholder="Obrigatória se recolher acima do saldo disponível. Ex.: loja tinha caixas físicas sem saldo no sistema / coleta de caixas antigas / ajuste operacional."></textarea>
           </label>
 
           <div class="form-actions">
@@ -6279,6 +6475,200 @@ function renderRecolhimentos() {
     </div>
   `;
 }
+
+
+function renderCaixasOcupadas() {
+  const today = todayStr();
+  const availableRoutes = getVisibleRoutes(appState, currentUser);
+  const visibleRecords = (appState.movements.occupiedBoxes || [])
+    .filter((item) => isActiveMovement(item) && isMovementVisibleToUser(item, currentUser, appState))
+    .slice(0, 80);
+
+  return `
+    <div class="grid-2">
+      <div class="card">
+        <div class="page-header">
+          <div>
+            <h3>Registrar caixas ocupadas</h3>
+          </div>
+        </div>
+
+        <form id="form-caixas-ocupadas" class="stack">
+          <div class="form-grid-3">
+            <label>Data
+              <input type="date" name="date" value="${today}" readonly required />
+            </label>
+            <label>Rota
+              <select name="routeId" id="occupied-route" required>
+                <option value="">Selecione</option>
+                ${availableRoutes.map((route) => `<option value="${route.id}">${route.name}</option>`).join('')}
+              </select>
+            </label>
+            <label>Motorista
+              <select name="driverId" id="occupied-driver" required>
+                <option value="">Selecione</option>
+                ${availableRoutes.map((route) => {
+                  const driver = getUserById(route.driverId);
+                  return `<option value="${route.driverId}">${driver?.name || '-'}</option>`;
+                }).join('')}
+              </select>
+            </label>
+          </div>
+
+          <label>Loja
+            <select name="storeId" id="occupied-store" required>
+              <option value="">Selecione a rota primeiro</option>
+            </select>
+          </label>
+
+          <div id="occupied-store-info" class="helper-card compact small">Selecione a loja.</div>
+
+          <div class="form-grid">
+            <label>Quantidade de caixas ocupadas
+              <input type="number" min="1" step="1" name="totalQty" value="1" required />
+            </label>
+            <label>Com o que está sendo usada?
+              <input type="text" name="usedFor" placeholder="Ex.: exposição, outro produto, apoio da loja" required />
+            </label>
+          </div>
+
+          <label>Observação
+            <textarea name="notes" placeholder="Opcional. Ex.: corredor, banca, setor, responsável que informou."></textarea>
+          </label>
+
+          <div class="alert-strip warning">
+            <span>Este lançamento não altera estoque. Ele apenas cria um alerta de caixas impossibilitadas de recolhimento.</span>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Registrar caixas ocupadas</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="section-header">
+          <div>
+            <h3>Alertas de caixas ocupadas</h3>
+          </div>
+        </div>
+        <div class="list">
+          ${visibleRecords.length ? visibleRecords.map((item) => `
+            <div class="list-item">
+              <div class="list-item-head">
+                <strong>${getStoreById(item.storeId)?.name || '-'}</strong>
+                ${statusTag('warn')}
+              </div>
+              <div class="kpi-row"><span>Quantidade</span><strong>${safeInt(item.totalQty)} caixas</strong></div>
+              <p>Uso informado: <strong>${item.usedFor || '-'}</strong></p>
+              ${item.notes ? `<small class="muted">${item.notes}</small>` : ''}
+              <small class="muted">${getRouteById(item.routeId)?.name || '-'} • ${getUserById(item.driverId)?.name || '-'} • ${formatDateTimeBR(item.createdAt)}</small>
+            </div>
+          `).join('') : `<div class="empty">Nenhuma caixa ocupada registrada.</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderCaixasLiberadas() {
+  const today = todayStr();
+  const canLaunch = currentUser.role === 'promoter';
+  const promoterStore = canLaunch ? getStoreById(currentUser.storeId) : null;
+  const promoterStockTotal = promoterStore ? sumQty(getStoreStock(promoterStore.id)) : 0;
+  const visibleRecords = (appState.movements.releasedBoxes || [])
+    .filter((item) => isActiveMovement(item) && isMovementVisibleToUser(item, currentUser, appState))
+    .slice(0, 100);
+
+  const formCard = canLaunch ? `
+      <div class="card">
+        <div class="page-header">
+          <div>
+            <h3>Informar caixas liberadas</h3>
+          </div>
+        </div>
+
+        <form id="form-caixas-liberadas" class="stack">
+          <input type="hidden" name="storeId" value="${currentUser.storeId || ''}" />
+          <div class="form-grid">
+            <label>Data
+              <input type="date" name="date" value="${today}" readonly required />
+            </label>
+            <label>Loja
+              <input type="text" value="${escapeHtml(formatStoreNameForUser(promoterStore?.name || '-'))}" readonly />
+            </label>
+          </div>
+
+          <div class="helper-card compact small">
+            Saldo atual no sistema: <strong>${promoterStockTotal} caixas</strong>. Informe abaixo a situação real da loja.
+          </div>
+
+          <div class="form-grid-3">
+            <label>Total de caixas na loja
+              <input type="number" min="0" step="1" name="totalInStore" value="${promoterStockTotal}" required />
+            </label>
+            <label>Caixas liberadas
+              <input type="number" min="0" step="1" name="freeQty" value="0" required />
+            </label>
+            <label>Caixas ocupadas
+              <input type="number" min="0" step="1" name="occupiedQty" value="0" required />
+            </label>
+          </div>
+
+          <label>Observação
+            <textarea name="notes" placeholder="Opcional. Ex.: caixas com mercadoria, exposição, aguardando reposição, etc."></textarea>
+          </label>
+
+          <div id="released-balance-info" class="helper-card compact small">Informe liberadas + ocupadas igual ao total.</div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Salvar caixas liberadas</button>
+          </div>
+        </form>
+      </div>
+  ` : `
+      <div class="card">
+        <div class="page-header">
+          <div>
+            <h3>Consulta de caixas liberadas</h3>
+          </div>
+        </div>
+        <div class="empty">${currentUser.role === 'driver' ? 'Motorista visualiza somente as lojas da própria rota/carga.' : 'ADM visualiza os registros informados pelas lojas.'}</div>
+      </div>
+  `;
+
+  return `
+    <div class="grid-2">
+      ${formCard}
+
+      <div class="card">
+        <div class="section-header">
+          <div>
+            <h3>Últimos lançamentos</h3>
+          </div>
+        </div>
+        <div class="list">
+          ${visibleRecords.length ? visibleRecords.map((item) => `
+            <div class="list-item">
+              <div class="list-item-head">
+                <strong>${formatStoreNameForUser(getStoreById(item.storeId)?.name || '-')}</strong>
+                ${safeInt(item.occupiedQty) > 0 ? statusTag('warn') : statusTag('ok')}
+              </div>
+              <div class="stats-inline">
+                <div class="stat-pill"><span>Total</span><strong>${safeInt(item.totalInStore)}</strong></div>
+                <div class="stat-pill"><span>Liberadas</span><strong>${safeInt(item.freeQty)}</strong></div>
+                <div class="stat-pill"><span>Ocupadas</span><strong>${safeInt(item.occupiedQty)}</strong></div>
+              </div>
+              ${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ''}
+              <small class="muted">${formatDateBR(item.date)} • ${getRouteById(item.routeId)?.name || '-'} • ${formatDateTimeBR(item.createdAt)}</small>
+            </div>
+          `).join('') : `<div class="empty">Nenhum lançamento de caixas liberadas para seu acesso.</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 
 function renderRetornos() {
   const today = todayStr();
@@ -6414,6 +6804,91 @@ function renderInventoryDiffRows(previousQty, countedQty) {
   }).join('');
 }
 
+
+function getMandatoryInventoryPendingGroups(state = appState) {
+  return (state.mandatoryInventories || [])
+    .filter((schedule) => schedule.status !== 'cancelada')
+    .map((schedule) => {
+      const pendingStores = getMandatoryInventoryStoreIds(schedule, state)
+        .filter((storeId) => isMandatoryInventoryPendingForStore(schedule, storeId, state))
+        .map((storeId) => getStoreById(storeId, state))
+        .filter(Boolean)
+        .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+      return { schedule, pendingStores };
+    })
+    .filter((group) => group.pendingStores.length)
+    .sort((a, b) => String(a.schedule.date || '').localeCompare(String(b.schedule.date || '')) || String(b.schedule.createdAt || '').localeCompare(String(a.schedule.createdAt || '')));
+}
+
+function renderPendingMandatoryInventoryAdmin() {
+  const groups = getMandatoryInventoryPendingGroups(appState);
+  const totalPending = groups.reduce((acc, group) => acc + group.pendingStores.length, 0);
+
+  return `
+    <div class="card mandatory-pending-card">
+      <div class="section-header">
+        <div>
+          <h3>Inventários pendentes</h3>
+          <p>Lojas que ainda não realizaram o inventário obrigatório solicitado.</p>
+        </div>
+        <div class="badge-count">${totalPending}</div>
+      </div>
+      ${groups.length ? `
+        <div class="mandatory-pending-list">
+          ${groups.map((group) => {
+            const schedule = group.schedule;
+            const total = getMandatoryInventoryStoreIds(schedule).length;
+            const done = Array.isArray(schedule.completedStoreIds) ? schedule.completedStoreIds.length : 0;
+            const canceled = Array.isArray(schedule.canceledStoreIds) ? schedule.canceledStoreIds.length : 0;
+            const scopeLabel = schedule.scope === 'network' ? `Rede ${schedule.network || '-'}` : schedule.scope === 'store' ? 'Loja específica' : 'Todas as lojas';
+            return `
+              <details class="mandatory-pending-group">
+                <summary>
+                  <span><strong>${formatDateBR(schedule.date)}</strong> • ${escapeHtml(scopeLabel)}</span>
+                  <small>${group.pendingStores.length} pendente(s) de ${total} loja(s) • ${done} concluída(s) • ${canceled} cancelada(s)</small>
+                </summary>
+                <div class="table-wrap compact-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Loja pendente</th>
+                        <th>Rede</th>
+                        <th>Rota</th>
+                        <th>Responsável</th>
+                        <th>Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${group.pendingStores.map((store) => {
+                        const routeId = getEffectiveRoute(store.id, schedule.date);
+                        const route = getRouteById(routeId);
+                        const driver = getUserById(route?.driverId);
+                        const promoter = storeRequiresPromoter(store) ? getUserById(store.promoterId) : null;
+                        const responsible = storeRequiresPromoter(store) ? (promoter?.name || 'Promotor não vinculado') : (driver?.name || 'Motorista da rota');
+                        return `
+                          <tr>
+                            <td><strong>${escapeHtml(store.name)}</strong></td>
+                            <td>${escapeHtml(store.network || store.rede || '-')}</td>
+                            <td>${escapeHtml(route?.name || '-')}</td>
+                            <td>${escapeHtml(responsible)}</td>
+                            <td>
+                              <button type="button" class="btn btn-danger btn-cancel-mandatory-pending" data-schedule-id="${schedule.id}" data-store-id="${store.id}">Cancelar pendência</button>
+                            </td>
+                          </tr>
+                        `;
+                      }).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            `;
+          }).join('')}
+        </div>
+      ` : `<div class="empty">Nenhum inventário obrigatório pendente no momento.</div>`}
+    </div>
+  `;
+}
+
 function renderInventario() {
   const isAdmin = currentUser.role === 'admin';
   const history = appState.movements.inventories || [];
@@ -6453,7 +6928,8 @@ function renderInventario() {
                 </label>
               `}
               <label>Data do inventário
-                <input type="date" name="date" value="${todayStr()}" readonly required />
+                <input type="text" class="locked-date-input" value="${formatDateBR(todayStr())}" readonly aria-readonly="true" />
+                <input type="hidden" name="date" value="${todayStr()}" />
               </label>
               ${qtyInputs('inventario-promotor', currentQty)}
               <label>Observação
@@ -6547,18 +7023,23 @@ function renderInventario() {
         ${mandatoryHistory.length ? `
           <div class="table-wrap compact-table mandatory-inventory-history">
             <table>
-              <thead><tr><th>Data</th><th>Escopo</th><th>Lojas</th><th>Concluídas</th><th>Status</th></tr></thead>
+              <thead><tr><th>Data</th><th>Escopo</th><th>Lojas</th><th>Concluídas</th><th>Canceladas</th><th>Status</th></tr></thead>
               <tbody>
                 ${mandatoryHistory.map((item) => {
                   const total = getMandatoryInventoryStoreIds(item).length;
                   const done = Array.isArray(item.completedStoreIds) ? item.completedStoreIds.length : 0;
-                  return `<tr><td>${formatDateBR(item.date)}</td><td>${item.scope === 'network' ? item.network : item.scope === 'store' ? 'Loja específica' : 'Todas as lojas'}</td><td>${total}</td><td>${done}</td><td>${item.status === 'concluida' ? statusTag('ok') : statusTag('warn')}</td></tr>`;
+                  const canceled = Array.isArray(item.canceledStoreIds) ? item.canceledStoreIds.length : 0;
+                  const pending = getMandatoryInventoryStoreIds(item).filter((storeId) => isMandatoryInventoryPendingForStore(item, storeId)).length;
+                  const tag = item.status === 'cancelada' ? '<span class="tag danger">Cancelada</span>' : pending > 0 ? statusTag('warn') : statusTag('ok');
+                  return `<tr><td>${formatDateBR(item.date)}</td><td>${item.scope === 'network' ? item.network : item.scope === 'store' ? 'Loja específica' : 'Todas as lojas'}</td><td>${total}</td><td>${done}</td><td>${canceled}</td><td>${tag}</td></tr>`;
                 }).join('')}
               </tbody>
             </table>
           </div>
         ` : ''}
       </div>
+
+      ${renderPendingMandatoryInventoryAdmin()}
 
       <div class="grid-2">
         <div class="card">
@@ -6574,7 +7055,8 @@ function renderInventario() {
 
           <form id="form-inventario-cd" class="stack">
             <label>Data do inventário
-              <input type="date" name="date" value="${todayStr()}" readonly required />
+              <input type="text" class="locked-date-input" value="${formatDateBR(todayStr())}" readonly aria-readonly="true" />
+              <input type="hidden" name="date" value="${todayStr()}" />
             </label>
             ${qtyInputs('inventario-cd', appState.cdStock)}
             <label>Observação / motivo do ajuste
@@ -6596,7 +7078,8 @@ function renderInventario() {
           <form id="form-inventario-loja" class="stack">
             <div class="form-grid">
               <label>Data do inventário
-                <input type="date" name="date" value="${todayStr()}" required />
+                <input type="text" class="locked-date-input" value="${formatDateBR(todayStr())}" readonly aria-readonly="true" />
+                <input type="hidden" name="date" value="${todayStr()}" />
               </label>
               <label>Loja
                 <select name="storeId" id="inventario-store" required>
@@ -6904,6 +7387,8 @@ function renderEstornos() {
     ...appState.movements.driverDeliveries.map((item) => ({ type: 'driverDelivery', item, date: item.date, storeId: item.storeId, routeId: item.routeId, total: safeInt(item.totalDelivered) })),
     ...appState.movements.receipts.map((item) => ({ type: 'receipt', item, date: item.date, storeId: item.storeId, routeId: getStoreById(item.storeId)?.defaultRouteId, total: sumQty(item.qty) })),
     ...appState.movements.pickups.map((item) => ({ type: 'pickup', item, date: item.date, storeId: item.storeId, routeId: item.routeId, total: item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty) })),
+    ...(appState.movements.occupiedBoxes || []).map((item) => ({ type: 'occupiedBox', item, date: item.date, storeId: item.storeId, routeId: item.routeId, total: safeInt(item.totalQty) })),
+    ...(appState.movements.releasedBoxes || []).map((item) => ({ type: 'releasedBox', item, date: item.date, storeId: item.storeId, routeId: item.routeId, total: safeInt(item.freeQty) })),
     ...appState.movements.returns.map((item) => ({ type: 'return', item, date: item.date, storeId: null, routeId: item.routeId, total: sumQty(item.qty) })),
     ...(appState.movements.goianiaLoads || []).map((item) => ({ type: 'goianiaLoad', item, date: item.date, storeId: null, routeId: GOIANIA_TRUNK_ROUTE_ID, total: safeInt(item.totalLoaded) })),
     ...(appState.movements.goianiaTransfers || []).map((item) => ({ type: 'goianiaTransfer', item, date: item.date, storeId: item.storeId, routeId: item.routeId, total: sumQty(item.qty) })),
@@ -7600,6 +8085,31 @@ function renderRelatorios() {
   `;
 }
 
+function renderUserPermissionControls(user) {
+  if (!user) return '-';
+  if (user.role === 'admin') return '<small class="muted">ADM sempre tem acesso total.</small>';
+  const allowed = new Set(getEffectiveAllowedViews(user));
+  const available = NAV_ITEMS.filter((item) => item.roles.includes(user.role));
+  if (!available.length) return '<small class="muted">Sem abas disponíveis.</small>';
+  return `
+    <details class="permissions-details">
+      <summary>Editar permissões</summary>
+      <div class="permissions-grid">
+        ${available.map((item) => {
+          const isDashboard = item.key === 'dashboard';
+          return `
+            <label class="permission-check">
+              <input type="checkbox" class="user-view-permission" data-user-id="${user.id}" value="${item.key}" ${allowed.has(item.key) || isDashboard ? 'checked' : ''} ${isDashboard ? 'disabled' : ''} />
+              <span>${item.label}</span>
+            </label>
+          `;
+        }).join('')}
+      </div>
+    </details>
+  `;
+}
+
+
 function renderUsuarios() {
   if (currentUser.role !== 'admin') {
     return `<div class="empty">Acesso restrito ao ADM.</div>`;
@@ -7730,7 +8240,10 @@ function renderUsuarios() {
                   </td>
                   <td data-label="Senha atual"><strong>${escapeHtml(user.password)}</strong></td>
                   <td data-label="Status">${mustChangePassword(user) ? '<span class="tag warn">Primeiro acesso pendente</span>' : '<span class="tag ok">Senha alterada</span>'}</td>
-                  <td data-label="Permissão"><small class="muted">${getPermissionLabel(user)}</small></td>
+                  <td data-label="Permissão">
+                    <small class="muted">${getPermissionLabel(user)}</small>
+                    ${renderUserPermissionControls(user)}
+                  </td>
                   <td data-label="Ação"><button type="button" class="btn btn-secondary btn-save-user" data-user-id="${user.id}">Salvar alterações</button></td>
                 </tr>
               `).join('')}
@@ -7802,6 +8315,8 @@ function bindViewEvents() {
   if (currentView === 'entregasMotorista') bindEntregasMotoristaEvents();
   if (currentView === 'recebimentos') bindRecebimentosEvents();
   if (currentView === 'recolhimentos') bindRecolhimentosEvents();
+  if (currentView === 'caixasOcupadas') bindCaixasOcupadasEvents();
+  if (currentView === 'caixasLiberadas') bindCaixasLiberadasEvents();
   if (currentView === 'retornos') bindRetornosEvents();
   if (currentView === 'fechamento') bindFechamentoEvents();
   if (currentView === 'estornos') bindEstornosEvents();
@@ -8102,9 +8617,13 @@ function bindRecolhimentosEvents() {
       info.innerHTML = 'Selecione a loja.';
       return;
     }
+    const date = form.date.value || todayStr();
     const qty = getStoreStock(storeId);
+    const deliveredToday = appState.movements.outbounds
+      .filter((item) => isActiveMovement(item) && item.date === date && item.storeId === storeId)
+      .reduce((acc, item) => acc + sumQty(item.qty), 0);
     info.innerHTML = `
-      <strong>${getStoreById(storeId)?.name || '-'}</strong> • Disponível: <strong>${sumQty(qty)} caixas</strong>
+      <strong>${getStoreById(storeId)?.name || '-'}</strong> • Entregue hoje: <strong>${deliveredToday} caixas</strong> • Disponível: <strong>${sumQty(qty)} caixas</strong>
     `;
   };
 
@@ -8129,6 +8648,110 @@ function bindRecolhimentosEvents() {
     }
   });
 }
+
+
+function bindCaixasOcupadasEvents() {
+  const form = document.getElementById('form-caixas-ocupadas');
+  if (!form) return;
+  const routeSelect = document.getElementById('occupied-route');
+  const driverSelect = document.getElementById('occupied-driver');
+  const storeSelect = document.getElementById('occupied-store');
+  const info = document.getElementById('occupied-store-info');
+
+  const refreshDriver = () => {
+    if (currentUser.role === 'driver') {
+      driverSelect.value = currentUser.id;
+      driverSelect.setAttribute('readonly', 'readonly');
+    } else {
+      const route = getRouteById(routeSelect.value);
+      if (route) driverSelect.value = route.driverId;
+    }
+  };
+
+  const refreshStores = () => {
+    const date = form.date.value || todayStr();
+    const routeId = routeSelect.value;
+    let stores = appState.stores.filter((store) => getEffectiveRoute(store.id, date) === routeId);
+    if (currentUser.role === 'driver') {
+      stores = stores.filter((store) => canUserSeeStore(store.id, currentUser, date, appState));
+    }
+    storeSelect.innerHTML = `<option value="">Selecione</option>` + stores.map((store) => `<option value="${store.id}">${store.name}</option>`).join('');
+    refreshDriver();
+    refreshStoreInfo();
+  };
+
+  const refreshStoreInfo = () => {
+    const storeId = storeSelect.value;
+    if (!storeId) {
+      info.innerHTML = 'Selecione a loja.';
+      return;
+    }
+    const stock = getStoreStock(storeId);
+    const activeOccupied = (appState.movements.occupiedBoxes || [])
+      .filter((item) => isActiveMovement(item) && item.storeId === storeId)
+      .reduce((acc, item) => acc + safeInt(item.totalQty), 0);
+    info.innerHTML = `
+      <strong>${getStoreById(storeId)?.name || '-'}</strong> • Saldo em loja: <strong>${sumQty(stock)} caixas</strong> • Já sinalizadas como ocupadas: <strong>${activeOccupied} caixas</strong>
+    `;
+  };
+
+  routeSelect.addEventListener('change', refreshStores);
+  storeSelect.addEventListener('change', refreshStoreInfo);
+  form.date.addEventListener('change', refreshStores);
+  refreshStores();
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+      date: form.date.value || todayStr(),
+      routeId: form.routeId.value,
+      driverId: form.driverId.value,
+      storeId: form.storeId.value,
+      totalQty: safeInt(form.totalQty.value),
+      usedFor: form.usedFor.value.trim(),
+      notes: form.notes.value.trim(),
+    };
+    const result = await persistMutation('CREATE_OCCUPIED_BOXES', payload, 'Caixas ocupadas registradas e alerta criado.');
+    if (result.ok) render();
+  });
+}
+
+function bindCaixasLiberadasEvents() {
+  const form = document.getElementById('form-caixas-liberadas');
+  if (!form) return;
+  const info = document.getElementById('released-balance-info');
+  const refresh = () => {
+    const total = safeInt(form.totalInStore.value);
+    const free = safeInt(form.freeQty.value);
+    const occupied = safeInt(form.occupiedQty.value);
+    const diff = total - (free + occupied);
+    if (!info) return;
+    if (diff === 0) {
+      info.innerHTML = '<span class="tag ok">Fechado</span> Liberadas + ocupadas conferem com o total.';
+    } else {
+      info.innerHTML = `<span class="tag warn">Atenção</span> Falta ajustar ${Math.abs(diff)} caixa(s) para fechar com o total.`;
+    }
+  };
+  ['totalInStore', 'freeQty', 'occupiedQty'].forEach((name) => {
+    form[name]?.addEventListener('input', refresh);
+  });
+  refresh();
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+      date: todayStr(),
+      storeId: form.storeId.value,
+      totalInStore: safeInt(form.totalInStore.value),
+      freeQty: safeInt(form.freeQty.value),
+      occupiedQty: safeInt(form.occupiedQty.value),
+      notes: form.notes.value.trim(),
+    };
+    const result = await persistMutation('CREATE_RELEASED_BOXES', payload, 'Caixas liberadas salvas com sucesso.');
+    if (result.ok) render();
+  });
+}
+
 
 function bindRetornosEvents() {
   const form = document.getElementById('form-retorno');
@@ -8400,6 +9023,7 @@ function bindUsuariosEvents() {
         username: document.querySelector(`.user-login-input[data-user-id="${userId}"]`)?.value || '',
         storeId: document.querySelector(`.user-store-select[data-user-id="${userId}"]`)?.value || '',
         routeId: document.querySelector(`.user-route-select[data-user-id="${userId}"]`)?.value || '',
+        allowedViews: Array.from(document.querySelectorAll(`.user-view-permission[data-user-id="${userId}"]:checked`)).map((item) => item.value),
       };
       const result = await persistMutation('UPDATE_USER_ACCOUNT', payload, 'Usuário atualizado com sucesso.');
       if (result.ok) render();
@@ -8646,6 +9270,24 @@ function bindInventarioEvents() {
       if (result.ok) render();
     });
   }
+
+  document.querySelectorAll('.btn-cancel-mandatory-pending').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const reason = window.prompt('Informe o motivo para cancelar esta pendência de inventário:', 'Cancelado pelo ADM.');
+      if (reason === null) return;
+      const cleanReason = reason.trim();
+      if (cleanReason.length < 4) {
+        showToast('Informe um motivo para cancelar a pendência.', 'error');
+        return;
+      }
+      const result = await persistMutation('CANCEL_MANDATORY_INVENTORY_PENDING', {
+        scheduleId: button.dataset.scheduleId,
+        storeId: button.dataset.storeId,
+        reason: cleanReason,
+      }, 'Pendência de inventário cancelada.');
+      if (result.ok) render();
+    });
+  });
 
   document.querySelectorAll('.btn-resolve-divergence').forEach((button) => {
     button.addEventListener('click', async () => {
