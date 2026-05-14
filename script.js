@@ -6202,7 +6202,7 @@ function renderRecolhimentos() {
         <form id="form-recolhimento" class="stack">
           <div class="form-grid-3">
             <label>Data
-              <input type="date" name="date" value="${todayStr()}" required />
+              <input type="date" name="date" value="${todayStr()}" readonly required />
             </label>
             <label>Rota
               <select name="routeId" id="pickup-route" required>
@@ -6489,6 +6489,15 @@ function renderInventario() {
       </div>
     `;
   }
+
+  const mandatoryHistory = (appState.mandatoryInventories || [])
+    .slice()
+    .sort((a, b) => String(b.createdAt || b.date || '').localeCompare(String(a.createdAt || a.date || '')))
+    .slice(0, 12);
+  const pendingMandatory = (appState.mandatoryInventories || [])
+    .filter((item) => item.status !== 'cancelada')
+    .filter((item) => getMandatoryInventoryStoreIds(item).some((storeId) => isMandatoryInventoryPendingForStore(item, storeId)))
+    .filter((item) => item.status !== 'concluida');
 
   return `
     <div class="stack">
