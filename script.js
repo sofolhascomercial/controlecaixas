@@ -4463,6 +4463,78 @@ function getStoreOptionLabel(store) {
   return `${fullName} — Rede ${network}, Loja ${unit}`;
 }
 
+
+const DIA_A_DIA_BANDEJAS_ORDER = [
+  ['furnas'],
+  ['riacho fundo', 'riacho'],
+  ['formosa'],
+  ['eptg'],
+  ['gama'],
+  ['novo gama'],
+  ['aguas lindas'],
+  ['ceilandia centro'],
+  ['santo antonio'],
+  ['luziania'],
+  ['guara'],
+  ['p sul', 'psul', 'ceilandia sul p sul'],
+  ['samambaia'],
+  ['planaltina go'],
+  ['070', 'br 070'],
+  ['ceilandia norte', 'cei norte'],
+  ['park jk', 'park jk luziania'],
+  ['recanto das emas', 'recanto'],
+  ['taguatinga sul'],
+  ['vicente pires rua 12', 'rua 12'],
+  ['vicente pires rua 04', 'vicente pires rua 4', 'rua 04', 'rua 4'],
+  ['sia'],
+  ['sobradinho'],
+  ['planaltina mestre d armas', 'mestre d armas', 'mestre darmas'],
+  ['planaltina df'],
+  ['aguas claras'],
+  ['jardim botanico'],
+  ['aparecida de goiania', 'aparecida goiania', 'aparecida'],
+  ['cesar lates', 'cesar lattes'],
+  ['rio verde'],
+  ['horacio costa'],
+  ['itumbiara'],
+  ['gurupi'],
+  ['goianesia'],
+  ['lem ba', 'lem'],
+];
+
+function shouldUseDiaADiaBandejasOrder(user) {
+  return !!user
+    && user.role === 'cd'
+    && canUserLaunchBoxType(user, 'bandejas')
+    && !canUserLaunchBoxType(user, 'folhagens');
+}
+
+function diaADiaBandejasOrderIndex(store) {
+  if (inferStoreNetwork(store) !== 'Dia a Dia') return Number.MAX_SAFE_INTEGER;
+  const candidates = [
+    getStoreUnitName(store),
+    formatStoreNameForUser(store?.name || ''),
+    store?.name || '',
+  ].map(normalizeText).filter(Boolean);
+
+  for (let index = 0; index < DIA_A_DIA_BANDEJAS_ORDER.length; index += 1) {
+    const aliases = DIA_A_DIA_BANDEJAS_ORDER[index].map(normalizeText);
+    if (candidates.some((candidate) => aliases.some((alias) => candidate === alias || candidate.startsWith(`${alias} `)))) {
+      return index;
+    }
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function compareOutboundStoreOptions(a, b, user) {
+  if (shouldUseDiaADiaBandejasOrder(user)) {
+    const aIndex = diaADiaBandejasOrderIndex(a);
+    const bIndex = diaADiaBandejasOrderIndex(b);
+    if (aIndex !== bIndex) return aIndex - bIndex;
+  }
+  return getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR');
+}
+
 function buildNetworkOptions(selectedValue = '', state = appState) {
   return uniqueNetworks(state)
     .map((network) => `<option value="${escapeHtml(network)}" ${network === selectedValue ? 'selected' : ''}>${escapeHtml(network)}</option>`)
@@ -8049,7 +8121,7 @@ function renderSaidas() {
   const showSeparatorFilter = canUseSeparatorFilter(currentUser);
   const stores = getActiveStores()
     .filter((store) => storeHasPendingOutboundForUser(store.id, date, currentUser, appState))
-    .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+    .sort((a, b) => compareOutboundStoreOptions(a, b, currentUser));
   return `
     <div class="grid-2">
       <div class="card">
@@ -10535,7 +10607,7 @@ function bindSaidasEvents() {
       .filter((store) => !network || inferStoreNetwork(store) === network)
       .filter((store) => !separator || getStoreSeparator(store) === separator)
       .filter((store) => storeHasPendingOutboundForUser(store.id, date, currentUser, appState))
-      .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+      .sort((a, b) => compareOutboundStoreOptions(a, b, currentUser));
   };
 
   const refreshStoreOptions = () => {
