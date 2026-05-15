@@ -4478,6 +4478,78 @@ function hasOutboundForStoreDate(storeId, date = todayStr(), state = appState) {
   );
 }
 
+function getActiveOutboundForStoreDate(storeId, date = todayStr(), state = appState) {
+  return state.movements.outbounds.find((item) =>
+    isActiveMovement(item)
+    && item.status !== 'historico'
+    && item.storeId === storeId
+    && item.date === date
+  );
+}
+
+function getPositiveQtyBoxTypes(qty = emptyQty()) {
+  return BOX_TYPES.filter((item) => safeInt(qty?.[item.key]) > 0).map((item) => item.key);
+}
+
+function getBoxTypeLabels(keys = []) {
+  const lookup = Object.fromEntries(BOX_TYPES.map((item) => [item.key, item.label]));
+  return keys.map((key) => lookup[key] || key).join(' e ');
+}
+
+function getPendingOutboundBoxTypesForStoreDate(storeId, date = todayStr(), user = currentUser, state = appState) {
+  const allowedKeys = user?.role === 'cd' ? getAllowedBoxTypesForUser(user) : BOX_TYPES.map((item) => item.key);
+  const existing = getActiveOutboundForStoreDate(storeId, date, state);
+  const existingQty = sanitizeQty(existing?.qty || emptyQty());
+  return allowedKeys.filter((key) => safeInt(existingQty[key]) <= 0);
+}
+
+function storeHasPendingOutboundForUser(storeId, date = todayStr(), user = currentUser, state = appState) {
+  return getPendingOutboundBoxTypesForStoreDate(storeId, date, user, state).length > 0;
+}
+
+function getOutboundQtyConflicts(storeId, date = todayStr(), qty = emptyQty(), state = appState) {
+  const existing = getActiveOutboundForStoreDate(storeId, date, state);
+  if (!existing) return [];
+  const existingQty = sanitizeQty(existing.qty);
+  const nextQty = sanitizeQty(qty);
+  return BOX_TYPES
+    .filter((item) => safeInt(nextQty[item.key]) > 0 && safeInt(existingQty[item.key]) > 0)
+    .map((item) => item.key);
+}
+
+function buildCdLaunchRecord(qty, actor, date = todayStr()) {
+  return {
+    id: randomId('cdl'),
+    date,
+    qty: sanitizeQty(qty),
+    createdBy: actor?.name || '',
+    createdById: actor?.id || '',
+    createdAt: nowIso(),
+  };
+}
+
+function normalizeOutboundCdLaunches(outbound) {
+  if (!outbound) return [];
+  if (Array.isArray(outbound.cdLaunches) && outbound.cdLaunches.length) {
+    return outbound.cdLaunches.map((launch) => ({
+      ...launch,
+      qty: sanitizeQty(launch.qty),
+      date: launch.date || outbound.date,
+      createdBy: launch.createdBy || outbound.createdBy || '',
+      createdById: launch.createdById || outbound.createdById || '',
+      createdAt: launch.createdAt || outbound.createdAt || nowIso(),
+    }));
+  }
+  return [{
+    id: randomId('cdl'),
+    date: outbound.date,
+    qty: sanitizeQty(outbound.qty),
+    createdBy: outbound.createdBy || '',
+    createdById: outbound.createdById || '',
+    createdAt: outbound.createdAt || nowIso(),
+  }];
+}
+
 function formatNameForInput(user, state = appState) {
   if (!user) return '';
   if (user.role === 'promoter' && user.storeId) {
@@ -4873,6 +4945,19 @@ function getGoianiaExpectedQty(date = todayStr(), state = appState) {
 function getVisibleOutboundSummaryRows(date = todayStr(), state = appState, user = currentUser) {
   return state.movements.outbounds
     .filter((item) => isActiveMovement(item) && item.status !== 'historico')
+    .flatMap((item) => {
+      const launches = normalizeOutboundCdLaunches(item);
+      return launches.map((launch) => ({
+        ...item,
+        id: `${item.id}_${launch.id || randomId('cdl')}`,
+        outboundId: item.id,
+        qty: sanitizeQty(launch.qty),
+        date: launch.date || item.date,
+        createdBy: launch.createdBy || item.createdBy || '',
+        createdById: launch.createdById || item.createdById || '',
+        createdAt: launch.createdAt || item.createdAt || '',
+      }));
+    })
     .filter((item) => !date || item.date === date)
     .filter((item) => {
       if (!user || user.role === 'admin') return true;
@@ -5845,30 +5930,53 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const driverId = getEffectiveDriver(routeId, outboundDate, store.id, state);
     if (!driverId) return { ok: false, error: 'A rota desta loja não possui motorista vinculado. Corrija o motorista no ADM antes de salvar a saída.' };
 
-    if (hasOutboundForStoreDate(store.id, outboundDate, state)) {
-      return { ok: false, error: 'Esta loja já teve saída lançada nessa data. Ela saiu da lista de pendentes.' };
+    const existingOutbound = getActiveOutboundForStoreDate(store.id, outboundDate, state);
+    const conflicts = getOutboundQtyConflicts(store.id, outboundDate, qty, state);
+    if (conflicts.length) {
+      return { ok: false, error: `Esta loja já teve lançamento de ${getBoxTypeLabels(conflicts)} nessa data.` };
     }
 
     const cdStock = getCdStock(state);
     if (qtyExceeds(qty, cdStock)) return { ok: false, error: 'O CD não possui caixas suficientes para esta saída.' };
 
     state.cdStock = subQty(cdStock, qty);
-    state.movements.outbounds.unshift({
-      id: randomId('out'),
-      date: outboundDate,
-      routeId,
-      driverId,
-      storeId: store.id,
-      network: inferStoreNetwork(store),
-      separator: getStoreSeparator(store) || null,
-      qty,
-      status: 'aguardando_loja',
-      createdBy: actor.name,
-      createdById: actor.id,
-      createdAt: nowIso(),
-      receiptId: null,
-    });
-    audit('Saídas do CD', 'Nova saída', `Envio para ${store.name} na ${getRouteById(routeId, state)?.name || '-'} com total de ${sumQty(qty)} caixas.`);
+
+    if (existingOutbound) {
+      if (existingOutbound.driverDeliveryId || existingOutbound.receiptId || existingOutbound.goianiaTransferId) {
+        state.cdStock = addQty(getCdStock(state), qty);
+        return { ok: false, error: 'Esta loja já teve validação posterior. Estorne a validação antes de complementar a saída.' };
+      }
+      existingOutbound.cdLaunches = normalizeOutboundCdLaunches(existingOutbound);
+      existingOutbound.cdLaunches.push(buildCdLaunchRecord(qty, actor, outboundDate));
+      existingOutbound.qty = addQty(existingOutbound.qty, qty);
+      existingOutbound.routeId = routeId;
+      existingOutbound.driverId = driverId;
+      existingOutbound.network = inferStoreNetwork(store);
+      existingOutbound.separator = getStoreSeparator(store) || null;
+      existingOutbound.updatedAt = nowIso();
+      existingOutbound.updatedBy = actor.name;
+      existingOutbound.updatedById = actor.id;
+      audit('Saídas do CD', 'Saída complementar', `${actor.name} complementou ${getBoxTypeLabels(getPositiveQtyBoxTypes(qty))} para ${store.name}. Total atual: ${sumQty(existingOutbound.qty)} caixas.`);
+    } else {
+      const launchRecord = buildCdLaunchRecord(qty, actor, outboundDate);
+      state.movements.outbounds.unshift({
+        id: randomId('out'),
+        date: outboundDate,
+        routeId,
+        driverId,
+        storeId: store.id,
+        network: inferStoreNetwork(store),
+        separator: getStoreSeparator(store) || null,
+        qty,
+        cdLaunches: [launchRecord],
+        status: 'aguardando_loja',
+        createdBy: actor.name,
+        createdById: actor.id,
+        createdAt: nowIso(),
+        receiptId: null,
+      });
+      audit('Saídas do CD', 'Nova saída', `Envio para ${store.name} na ${getRouteById(routeId, state)?.name || '-'} com total de ${sumQty(qty)} caixas.`);
+    }
   }
 
   if (type === 'CONFIRM_RECEIPT') {
@@ -7940,7 +8048,7 @@ function renderSaidas() {
   const recent = appState.movements.outbounds.filter((item) => isActiveMovement(item) && item.status !== 'historico').slice(0, 10);
   const showSeparatorFilter = canUseSeparatorFilter(currentUser);
   const stores = getActiveStores()
-    .filter((store) => !hasOutboundForStoreDate(store.id, date))
+    .filter((store) => storeHasPendingOutboundForUser(store.id, date, currentUser, appState))
     .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
   return `
     <div class="grid-2">
@@ -10426,7 +10534,7 @@ function bindSaidasEvents() {
     return getActiveStores()
       .filter((store) => !network || inferStoreNetwork(store) === network)
       .filter((store) => !separator || getStoreSeparator(store) === separator)
-      .filter((store) => !hasOutboundForStoreDate(store.id, date))
+      .filter((store) => storeHasPendingOutboundForUser(store.id, date, currentUser, appState))
       .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
   };
 
@@ -10499,8 +10607,10 @@ function bindSaidasEvents() {
       showToast('Selecione a loja para registrar a saída.', 'error');
       return;
     }
-    if (hasOutboundForStoreDate(storeId, date)) {
-      showToast('Esta loja já teve saída lançada nessa data.', 'error');
+    const qty = readQtyFromForm(form, 'saida');
+    const conflicts = getOutboundQtyConflicts(storeId, date, qty, appState);
+    if (conflicts.length) {
+      showToast(`Esta loja já teve lançamento de ${getBoxTypeLabels(conflicts)} nessa data.`, 'error');
       refreshStoreOptions();
       return;
     }
@@ -10513,7 +10623,6 @@ function bindSaidasEvents() {
       return;
     }
 
-    const qty = readQtyFromForm(form, 'saida');
     const payload = {
       date,
       storeId,
