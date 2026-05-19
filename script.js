@@ -38,6 +38,15 @@ const GOIANIA_TRUNK_ROUTE_ID = 'rota_goiania_vinicius';
 const GOIANIA_TRUNK_DRIVER_IDS = ['user_motor_vinicius', 'user_motor_sebastiao'];
 const SUPPORT_POINT_STORE_ID = 'loja_fazenda_neropolis_sr_carlinhos';
 const SUPPORT_POINT_ROUTE_ID = 'rota_ponto_apoio_neropolis';
+const RELIEF_DRIVER_CAIO_USER = {
+  id: 'user_motor_caio',
+  name: 'Caio',
+  username: 'motorcaio',
+  password: INITIAL_PASSWORD,
+  role: 'driver',
+  isReliefDriver: true,
+  forcePasswordChange: true,
+};
 
 
 const SEPARATOR_STORE_LINKS = [
@@ -1039,6 +1048,15 @@ const ROUTE_DATASET = {
       "username": "gestao",
       "password": "123456",
       "role": "viewer"
+    },
+    {
+      "id": "user_motor_caio",
+      "name": "Caio",
+      "username": "motorcaio",
+      "password": "123456",
+      "role": "driver",
+      "isReliefDriver": true,
+      "forcePasswordChange": true
     },
     {
       "id": "user_motor_vinicius",
@@ -4569,10 +4587,9 @@ function getBoxTypeLabels(keys = []) {
 }
 
 function getPendingOutboundBoxTypesForStoreDate(storeId, date = todayStr(), user = currentUser, state = appState) {
-  const allowedKeys = user?.role === 'cd' ? getAllowedBoxTypesForUser(user) : BOX_TYPES.map((item) => item.key);
   const existing = getActiveOutboundForStoreDate(storeId, date, state);
-  const existingQty = sanitizeQty(existing?.qty || emptyQty());
-  return allowedKeys.filter((key) => safeInt(existingQty[key]) <= 0);
+  if (existing) return [];
+  return user?.role === 'cd' ? getAllowedBoxTypesForUser(user) : BOX_TYPES.map((item) => item.key);
 }
 
 function storeHasPendingOutboundForUser(storeId, date = todayStr(), user = currentUser, state = appState) {
@@ -4650,6 +4667,22 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function ensureReliefDriverSeedUser(state) {
+  if (!state || !Array.isArray(state.users)) return state;
+  const existing = state.users.find((user) => user.id === RELIEF_DRIVER_CAIO_USER.id || normalizeLoginValue(user.username) === normalizeLoginValue(RELIEF_DRIVER_CAIO_USER.username));
+  if (existing) {
+    existing.id = RELIEF_DRIVER_CAIO_USER.id;
+    existing.name = existing.name || RELIEF_DRIVER_CAIO_USER.name;
+    existing.username = existing.username || RELIEF_DRIVER_CAIO_USER.username;
+    existing.role = 'driver';
+    existing.isReliefDriver = true;
+    delete existing.routeId;
+    return state;
+  }
+  state.users.push(normalizeUserRecord({ ...RELIEF_DRIVER_CAIO_USER }));
+  return state;
+}
+
 function applyRouteDataset(base) {
   const seedData = createRouteSeedData();
   const previousStocksById = base.storeStocks || {};
@@ -4684,6 +4717,7 @@ function applyRouteDataset(base) {
     .filter((user) => user?.id && !seededIds.has(user.id))
     .map(normalizeUserRecord);
   base.users = [...seededUsers, ...customUsers];
+  ensureReliefDriverSeedUser(base);
   base.routes = seedData.routes;
   base.stores = seedData.stores;
   enrichStoreCommercialLinks(base);
@@ -4777,6 +4811,18 @@ function qtyDiff(a, b) {
   return diff;
 }
 
+function applySignedQty(base, diff) {
+  const out = emptyQty();
+  BOX_TYPES.forEach((item) => {
+    out[item.key] = safeInt(base?.[item.key]) + signedInt(diff?.[item.key]);
+  });
+  return out;
+}
+
+function hasSignedNegativeQty(qty) {
+  return BOX_TYPES.some((item) => signedInt(qty?.[item.key]) < 0);
+}
+
 function hasQtyDifference(a, b) {
   return BOX_TYPES.some((item) => safeInt(a?.[item.key]) !== safeInt(b?.[item.key]));
 }
@@ -4827,6 +4873,43 @@ function getUserById(id, state = appState) {
   return state.users.find((user) => user.id === id) || null;
 }
 
+function isReliefDriver(user) {
+  return !!user && user.role === 'driver' && user.isReliefDriver === true;
+}
+
+function getReliefDriverAssignment(user = currentUser, date = todayStr(), state = appState) {
+  if (!isReliefDriver(user)) return null;
+  return (state?.reliefDriverAssignments || []).find((item) =>
+    item
+    && item.userId === user.id
+    && item.date === date
+    && !item.canceledAt
+  ) || null;
+}
+
+function getEffectiveDriverRouteId(user = currentUser, date = todayStr(), state = appState) {
+  if (!user || user.role !== 'driver') return null;
+  if (isReliefDriver(user)) return getReliefDriverAssignment(user, date, state)?.routeId || null;
+  return user.routeId || null;
+}
+
+function getReliefAssignmentForRoute(routeId, date = todayStr(), state = appState) {
+  if (!routeId) return null;
+  return (state?.reliefDriverAssignments || []).find((item) =>
+    item
+    && item.routeId === routeId
+    && item.date === date
+    && !item.canceledAt
+  ) || null;
+}
+
+function getReliefDriverStatusLabel(user = currentUser, date = todayStr(), state = appState) {
+  if (!isReliefDriver(user)) return '';
+  const assignment = getReliefDriverAssignment(user, date, state);
+  if (!assignment) return 'Folguista: rota do dia pendente';
+  return `Folguista: ${getRouteById(assignment.routeId, state)?.name || assignment.routeName || 'rota selecionada'} em ${formatDateBR(date)}`;
+}
+
 function normalizeLoginValue(value) {
   return String(value || '').trim().replace(/_/g, '').toLowerCase();
 }
@@ -4849,6 +4932,9 @@ function normalizeUserRecord(user) {
   normalized.allowedViews = normalizeAllowedViewsForRole(normalized.role, normalized.allowedViews);
   normalized.allowedBoxTypes = normalizeAllowedBoxTypesForUser(normalized.role, normalized.allowedBoxTypes);
   if (normalized.role !== 'cd') delete normalized.allowedBoxTypes;
+  if (isReliefDriver(normalized)) {
+    delete normalized.routeId;
+  }
   return normalized;
 }
 
@@ -4932,6 +5018,7 @@ function getFirstAllowedView(user = currentUser) {
 
 function getUserAccessTarget(user, state = appState) {
   if (!user) return '-';
+  if (isReliefDriver(user)) return getReliefDriverStatusLabel(user, todayStr(), state);
   if (user.storeId) return getStoreById(user.storeId, state)?.name || '-';
   if (user.routeId) return getRouteById(user.routeId, state)?.name || '-';
   if (user.role === 'admin') return 'ADM geral';
@@ -5002,8 +5089,12 @@ function isGoianiaRoute(routeId) {
   return GOIANIA_ROUTE_IDS.includes(routeId);
 }
 
-function isGoianiaTrunkUser(user) {
-  return !!user && (GOIANIA_TRUNK_DRIVER_IDS.includes(user.id) || user.routeId === GOIANIA_TRUNK_ROUTE_ID);
+function isGoianiaTrunkUser(user, date = todayStr(), state = appState) {
+  return !!user && (
+    GOIANIA_TRUNK_DRIVER_IDS.includes(user.id)
+    || user.routeId === GOIANIA_TRUNK_ROUTE_ID
+    || getEffectiveDriverRouteId(user, date, state) === GOIANIA_TRUNK_ROUTE_ID
+  );
 }
 
 function getGoianiaOutbounds(date = todayStr(), state = appState) {
@@ -5124,6 +5215,7 @@ function ensureStateShape(state) {
   base.movements.inventories = Array.isArray(base.movements.inventories) ? base.movements.inventories : [];
   base.movements.occupiedBoxes = Array.isArray(base.movements.occupiedBoxes) ? base.movements.occupiedBoxes : [];
   base.movements.releasedBoxes = Array.isArray(base.movements.releasedBoxes) ? base.movements.releasedBoxes : [];
+  base.reliefDriverAssignments = Array.isArray(base.reliefDriverAssignments) ? base.reliefDriverAssignments : [];
 
   base.movements.outbounds = base.movements.outbounds.map((item) => ({
     ...item,
@@ -5184,6 +5276,13 @@ function ensureStateShape(state) {
     occupiedQty: safeInt(item.occupiedQty),
     status: item.status || 'registrado',
   }));
+  base.reliefDriverAssignments = base.reliefDriverAssignments.map((item) => ({
+    ...item,
+    date: item.date || todayStr(),
+    routeId: item.routeId || '',
+    userId: item.userId || '',
+    selectedAt: item.selectedAt || item.createdAt || nowIso(),
+  }));
 
   base.divergences = Array.isArray(base.divergences) ? base.divergences : [];
   base.audit = Array.isArray(base.audit) ? base.audit : [];
@@ -5208,6 +5307,7 @@ function ensureStateShape(state) {
   }
 
   base.users = Array.isArray(base.users) && base.users.length ? base.users.map(normalizeUserRecord) : seedData.users.map(normalizeUserRecord);
+  ensureReliefDriverSeedUser(base);
   base.stores = Array.isArray(base.stores) && base.stores.length ? base.stores : seedData.stores;
   base.routes = Array.isArray(base.routes) && base.routes.length ? base.routes : seedData.routes;
   enrichStoreCommercialLinks(base);
@@ -5259,6 +5359,8 @@ function ensureStateShape(state) {
   base.movements.routeExceptions = base.movements.routeExceptions.filter((item) => (!item.storeId || validStoreIds.has(item.storeId)) && (!item.newRouteId || validRouteIds.has(item.newRouteId)));
   base.movements.occupiedBoxes = base.movements.occupiedBoxes.filter((item) => (!item.storeId || validStoreIds.has(item.storeId)) && (!item.routeId || validRouteIds.has(item.routeId)));
   base.movements.releasedBoxes = base.movements.releasedBoxes.filter((item) => (!item.storeId || validStoreIds.has(item.storeId)) && (!item.routeId || validRouteIds.has(item.routeId)));
+  const validUserIds = new Set(base.users.map((user) => user.id));
+  base.reliefDriverAssignments = base.reliefDriverAssignments.filter((item) => (!item.userId || validUserIds.has(item.userId)) && (!item.routeId || validRouteIds.has(item.routeId)));
   base.divergences = base.divergences.filter((item) => (!item.storeId || validStoreIds.has(item.storeId)) && (!item.routeId || validRouteIds.has(item.routeId)));
 
   return base;
@@ -5301,6 +5403,7 @@ function createSeedState() {
       occupiedBoxes: [],
       releasedBoxes: [],
     },
+    reliefDriverAssignments: [],
     divergences: [],
     audit: [],
     dayClosings: [],
@@ -5420,6 +5523,89 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     });
   };
 
+  const divergenceMatchesOutbound = (divergence, outbound, types = []) => {
+    if (!divergence || !outbound || !types.includes(divergence.type)) return false;
+    if (divergence.outboundId && divergence.outboundId === outbound.id) return true;
+    return !divergence.outboundId
+      && divergence.date === outbound.date
+      && divergence.storeId === outbound.storeId
+      && (!divergence.routeId || divergence.routeId === outbound.routeId);
+  };
+
+  const closeDivergencesForOutbound = (outbound, types = [], reason = 'Recalculada após correção de lançamento.') => {
+    state.divergences.forEach((divergence) => {
+      if (divergence.status !== 'aberta') return;
+      if (!divergenceMatchesOutbound(divergence, outbound, types)) return;
+      divergence.status = 'resolvida';
+      divergence.resolvedAt = nowIso();
+      divergence.resolvedBy = actor.name;
+      divergence.resolution = reason;
+      divergence.resolutionType = 'recalculada_por_correcao';
+    });
+  };
+
+  const recalculateOutboundDivergences = (outbound, reason = 'Recalculada após correção de lançamento.') => {
+    if (!outbound) return;
+    const store = getStoreById(outbound.storeId, state);
+    const expectedQty = sanitizeQty(outbound.qty);
+
+    closeDivergencesForOutbound(outbound, ['entrega_motorista_loja', 'recebimento_loja'], reason);
+
+    const delivery = state.movements.driverDeliveries.find((item) => item.id === outbound.driverDeliveryId);
+    if (delivery) {
+      delivery.expectedQty = expectedQty;
+      delivery.hasDivergence = hasQtyDifference(expectedQty, delivery.actualQty);
+      if (delivery.hasDivergence) {
+        openDivergence({
+          type: 'entrega_motorista_loja',
+          outboundId: outbound.id,
+          driverDeliveryId: delivery.id,
+          date: delivery.date || outbound.date,
+          routeId: outbound.routeId,
+          driverId: delivery.driverId || outbound.driverId,
+          storeId: outbound.storeId,
+          expectedQty,
+          actualQty: sanitizeQty(delivery.actualQty),
+          differenceQty: qtyDiff(delivery.actualQty, expectedQty),
+          justification: reason || `Motorista informou ${sumQty(delivery.actualQty)} caixas, mas o correto esperado para a loja era ${sumQty(expectedQty)}.`,
+          originJustification: delivery.notes || '',
+          responsibleUserId: delivery.driverId || outbound.driverId,
+          responsibleRole: 'driver',
+          requiresResponsibleExplanation: true,
+          responsibleExplanation: '',
+          responsibleExplanationAt: null,
+          responsibleExplanationBy: null,
+        });
+      }
+    }
+
+    const receipt = state.movements.receipts.find((item) => item.id === outbound.receiptId);
+    if (receipt && storeRequiresPromoter(store)) {
+      if (hasQtyDifference(expectedQty, receipt.qty)) {
+        openDivergence({
+          type: 'recebimento_loja',
+          outboundId: outbound.id,
+          receiptId: receipt.id,
+          date: receipt.date || outbound.date,
+          routeId: outbound.routeId,
+          driverId: outbound.driverId,
+          storeId: outbound.storeId,
+          expectedQty,
+          actualQty: sanitizeQty(receipt.qty),
+          differenceQty: qtyDiff(receipt.qty, expectedQty),
+          justification: reason || 'Diferença identificada entre o CD e o recebimento da loja.',
+          originJustification: receipt.justification || '',
+          responsibleUserId: outbound.driverId,
+          responsibleRole: 'driver',
+          requiresResponsibleExplanation: true,
+          responsibleExplanation: '',
+          responsibleExplanationAt: null,
+          responsibleExplanationBy: null,
+        });
+      }
+    }
+  };
+
   if (type === 'CHANGE_PASSWORD') {
     const target = getUserById(payload.userId, state);
     if (!target) return { ok: false, error: 'Usuário não encontrado.' };
@@ -5438,6 +5624,49 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     target.initialPasswordChanged = true;
 
     audit('Usuários', 'Senha alterada', actor.id === target.id ? `Senha inicial alterada por ${target.name}.` : `Senha de ${target.name} alterada pelo ADM.`);
+  }
+
+  if (type === 'SET_RELIEF_DRIVER_ROUTE') {
+    const target = getUserById(payload.userId || actor.id, state);
+    if (!target || !isReliefDriver(target)) return { ok: false, error: 'Motorista folguista não encontrado.' };
+    if (actor.role !== 'admin' && actor.id !== target.id) {
+      return { ok: false, error: 'Somente o próprio folguista ou o ADM pode definir essa rota.' };
+    }
+
+    const date = payload.date || todayStr();
+    if (actor.role === 'driver' && date !== todayStr()) {
+      return { ok: false, error: 'Motorista folguista só pode definir a rota do dia atual.' };
+    }
+
+    const route = getRouteById(payload.routeId, state);
+    if (!route) return { ok: false, error: 'Selecione uma rota válida.' };
+
+    const existing = getReliefDriverAssignment(target, date, state);
+    if (existing && actor.role !== 'admin') {
+      return { ok: false, error: `A rota do dia já está definida para ${getRouteById(existing.routeId, state)?.name || existing.routeName || 'rota selecionada'}. Apenas o ADM pode alterar.` };
+    }
+
+    if (existing && actor.role === 'admin') {
+      existing.canceledAt = nowIso();
+      existing.canceledBy = actor.name;
+      existing.canceledById = actor.id;
+      existing.cancelReason = String(payload.reason || 'Alteração feita pelo ADM.').trim();
+    }
+
+    state.reliefDriverAssignments.unshift({
+      id: randomId('relief'),
+      date,
+      userId: target.id,
+      userName: target.name,
+      routeId: route.id,
+      routeName: route.name,
+      selectedAt: nowIso(),
+      selectedBy: actor.name,
+      selectedById: actor.id,
+      reason: String(payload.reason || '').trim(),
+    });
+
+    audit('Motorista Folguista', existing ? 'Rota do dia alterada' : 'Rota do dia definida', `${target.name} ficou vinculado à rota ${route.name} em ${formatDateBR(date)}.`);
   }
 
   if (type === 'CREATE_USER') {
@@ -5541,9 +5770,16 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     }
 
     if (role === 'driver') {
-      const route = getRouteById(payload.routeId, state);
-      if (!route) return { ok: false, error: 'Selecione a rota vinculada ao motorista.' };
-      target.routeId = route.id;
+      if (isReliefDriver(target)) {
+        target.isReliefDriver = true;
+        delete target.routeId;
+      } else {
+        const route = getRouteById(payload.routeId, state);
+        if (!route) return { ok: false, error: 'Selecione a rota vinculada ao motorista.' };
+        target.routeId = route.id;
+      }
+    } else {
+      delete target.isReliefDriver;
     }
 
     normalizePromoterUserNames(state);
@@ -5694,7 +5930,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (!['admin', 'driver'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou motorista pode validar entrega.' };
     const outbound = state.movements.outbounds.find((item) => item.id === payload.outboundId);
     if (!outbound) return { ok: false, error: 'Saída não encontrada.' };
-    if (outbound.driverDeliveryId) return { ok: false, error: 'O motorista já validou esta entrega.' };
+    if (outbound.driverDeliveryId || state.movements.driverDeliveries.some((item) => isActiveMovement(item) && item.outboundId === outbound.id)) return { ok: false, error: 'O motorista já validou esta entrega. Para corrigir, use o botão Editar entrega.' };
     const store = getStoreById(outbound.storeId, state);
     if (!store) return { ok: false, error: 'Loja não encontrada.' };
     if (actor.role === 'driver' && !isMovementVisibleToUser(outbound, actor, state)) return { ok: false, error: 'Motorista só pode validar entregas da própria rota/carga.' };
@@ -5761,6 +5997,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (hasQtyDifference(expectedQty, actualQty)) {
       openDivergence({
         type: 'entrega_motorista_loja',
+        outboundId: outbound.id,
+        driverDeliveryId: delivery.id,
         date: delivery.date,
         routeId: outbound.routeId,
         driverId: delivery.driverId,
@@ -6003,9 +6241,12 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (!driverId) return { ok: false, error: 'A rota desta loja não possui motorista vinculado. Corrija o motorista no ADM antes de salvar a saída.' };
 
     const existingOutbound = getActiveOutboundForStoreDate(store.id, outboundDate, state);
+    if (existingOutbound) {
+      return { ok: false, error: 'Esta loja já teve lançamento de entrega nessa data. Para corrigir a quantidade enviada, use o botão Editar em Saídas recentes.' };
+    }
     const conflicts = getOutboundQtyConflicts(store.id, outboundDate, qty, state);
     if (conflicts.length) {
-      return { ok: false, error: `Esta loja já teve lançamento de ${getBoxTypeLabels(conflicts)} nessa data.` };
+      return { ok: false, error: `Esta loja já teve lançamento de ${getBoxTypeLabels(conflicts)} nessa data. Para corrigir, use o botão Editar em Saídas recentes.` };
     }
 
     const cdStock = getCdStock(state);
@@ -6051,16 +6292,174 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     }
   }
 
+
+  if (type === 'UPDATE_OUTBOUND_QTY') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode corrigir saídas.' };
+    const outbound = state.movements.outbounds.find((item) => item.id === payload.outboundId);
+    if (!outbound || !isActiveMovement(outbound) || outbound.status === 'historico') return { ok: false, error: 'Saída não encontrada para correção.' };
+    if (!canEditOutboundMovement(outbound, actor, state)) return { ok: false, error: 'Seu usuário não tem permissão para corrigir esta saída.' };
+    const reason = String(payload.reason || '').trim();
+    if (reason.length < 3) return { ok: false, error: 'Informe o motivo da correção.' };
+    const newQty = sanitizeQty(payload.qty);
+    const oldQty = sanitizeQty(outbound.qty);
+    if (sumQty(newQty) <= 0) return { ok: false, error: 'Informe pelo menos uma quantidade para a saída corrigida.' };
+    if (!hasQtyDifference(newQty, oldQty)) return { ok: false, error: 'A quantidade corrigida é igual à quantidade atual.' };
+
+    if (actor.role === 'cd') {
+      const forbiddenBox = BOX_TYPES.find((item) => safeInt(newQty[item.key]) > 0 && !canUserLaunchBoxType(actor, item.key));
+      if (forbiddenBox) return { ok: false, error: `Seu usuário não tem permissão para lançar ${forbiddenBox.label}.` };
+    }
+
+    const restoredCdStock = addQty(getCdStock(state), oldQty);
+    if (qtyExceeds(newQty, restoredCdStock)) return { ok: false, error: 'O CD não possui saldo suficiente para essa correção.' };
+    state.cdStock = subQty(restoredCdStock, newQty);
+
+    outbound.qty = newQty;
+    outbound.cdLaunches = [{
+      ...buildCdLaunchRecord(newQty, actor, outbound.date),
+      correction: true,
+      correctedFrom: oldQty,
+      correctionReason: reason,
+    }];
+    outbound.qtyCorrections = Array.isArray(outbound.qtyCorrections) ? outbound.qtyCorrections : [];
+    outbound.qtyCorrections.unshift({
+      id: randomId('corr'),
+      type: 'saida_cd',
+      previousQty: oldQty,
+      newQty,
+      reason,
+      correctedBy: actor.name,
+      correctedById: actor.id,
+      correctedAt: nowIso(),
+    });
+    outbound.updatedAt = nowIso();
+    outbound.updatedBy = actor.name;
+    outbound.updatedById = actor.id;
+
+    recalculateOutboundDivergences(outbound, `Correção de saída do CD: ${reason}`);
+    audit('Saídas do CD', 'Saída corrigida', `${actor.name} corrigiu ${getStoreById(outbound.storeId, state)?.name || '-'} de ${sumQty(oldQty)} para ${sumQty(newQty)} caixas. Motivo: ${reason}`);
+  }
+
+  if (type === 'UPDATE_DRIVER_DELIVERY_QTY') {
+    if (!['admin', 'driver'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou motorista pode corrigir entrega.' };
+    const delivery = state.movements.driverDeliveries.find((item) => item.id === payload.driverDeliveryId);
+    if (!delivery || !isActiveMovement(delivery)) return { ok: false, error: 'Entrega do motorista não encontrada para correção.' };
+    if (!canEditDriverDeliveryMovement(delivery, actor, state)) return { ok: false, error: 'Seu usuário não tem permissão para corrigir esta entrega.' };
+    const outbound = state.movements.outbounds.find((item) => item.id === delivery.outboundId);
+    if (!outbound) return { ok: false, error: 'Saída vinculada à entrega não encontrada.' };
+    const reason = String(payload.reason || '').trim();
+    if (reason.length < 3) return { ok: false, error: 'Informe o motivo da correção.' };
+    const newQty = sanitizeQty(payload.qty);
+    const oldQty = sanitizeQty(delivery.actualQty);
+    if (sumQty(newQty) <= 0) return { ok: false, error: 'Informe a quantidade corrigida entregue pelo motorista.' };
+    if (!hasQtyDifference(newQty, oldQty)) return { ok: false, error: 'A quantidade corrigida é igual à quantidade atual.' };
+
+    const store = getStoreById(delivery.storeId, state);
+    const receipt = state.movements.receipts.find((item) => item.id === outbound.receiptId || item.driverDeliveryId === delivery.id);
+    if (receipt && !storeRequiresPromoter(store)) {
+      const stockDiff = qtyDiff(newQty, oldQty);
+      const adjustedStock = applySignedQty(getStoreStock(delivery.storeId, state), stockDiff);
+      if (hasSignedNegativeQty(adjustedStock)) return { ok: false, error: 'Não há saldo suficiente na loja para reduzir essa quantidade. Verifique recolhimentos posteriores.' };
+      state.storeStocks[delivery.storeId] = adjustedStock;
+      receipt.qty = newQty;
+      receipt.updatedAt = nowIso();
+      receipt.updatedBy = actor.name;
+      receipt.updatedById = actor.id;
+      receipt.correctionReason = reason;
+      outbound.receivedQty = newQty;
+    }
+
+    delivery.qtyCorrections = Array.isArray(delivery.qtyCorrections) ? delivery.qtyCorrections : [];
+    delivery.qtyCorrections.unshift({
+      id: randomId('corr'),
+      type: 'entrega_motorista',
+      previousQty: oldQty,
+      newQty,
+      reason,
+      correctedBy: actor.name,
+      correctedById: actor.id,
+      correctedAt: nowIso(),
+    });
+    delivery.actualQty = newQty;
+    delivery.totalDelivered = sumQty(newQty);
+    delivery.expectedQty = sanitizeQty(outbound.qty);
+    delivery.hasDivergence = hasQtyDifference(delivery.expectedQty, newQty);
+    delivery.notes = delivery.notes ? `${delivery.notes}\nCorreção: ${reason}` : `Correção: ${reason}`;
+    delivery.updatedAt = nowIso();
+    delivery.updatedBy = actor.name;
+    delivery.updatedById = actor.id;
+    outbound.driverDeliveredTotal = sumQty(newQty);
+    outbound.driverDeliveredQty = newQty;
+    outbound.driverDeliveredBy = delivery.driverId ? getUserById(delivery.driverId, state)?.name || actor.name : actor.name;
+    outbound.updatedAt = nowIso();
+    outbound.updatedBy = actor.name;
+    outbound.updatedById = actor.id;
+
+    recalculateOutboundDivergences(outbound, `Correção da entrega do motorista: ${reason}`);
+    audit('Entrega do Motorista', 'Entrega corrigida', `${actor.name} corrigiu ${getStoreById(delivery.storeId, state)?.name || '-'} de ${sumQty(oldQty)} para ${sumQty(newQty)} caixas. Motivo: ${reason}`);
+  }
+
+  if (type === 'UPDATE_RECEIPT_QTY') {
+    if (!['admin', 'promoter'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou promotor pode corrigir recebimento.' };
+    const receipt = state.movements.receipts.find((item) => item.id === payload.receiptId);
+    if (!receipt || !isActiveMovement(receipt)) return { ok: false, error: 'Recebimento não encontrado para correção.' };
+    if (!canEditReceiptMovement(receipt, actor, state)) return { ok: false, error: 'Seu usuário não tem permissão para corrigir este recebimento.' };
+    const outbound = state.movements.outbounds.find((item) => item.id === receipt.outboundId);
+    if (!outbound) return { ok: false, error: 'Saída vinculada ao recebimento não encontrada.' };
+    const reason = String(payload.reason || '').trim();
+    if (reason.length < 3) return { ok: false, error: 'Informe o motivo da correção.' };
+    const newQty = sanitizeQty(payload.qty);
+    const oldQty = sanitizeQty(receipt.qty);
+    if (sumQty(newQty) <= 0) return { ok: false, error: 'Informe a quantidade corrigida recebida na loja.' };
+    if (!hasQtyDifference(newQty, oldQty)) return { ok: false, error: 'A quantidade corrigida é igual à quantidade atual.' };
+
+    const stockDiff = qtyDiff(newQty, oldQty);
+    const adjustedStock = applySignedQty(getStoreStock(receipt.storeId, state), stockDiff);
+    if (hasSignedNegativeQty(adjustedStock)) return { ok: false, error: 'Não há saldo suficiente na loja para reduzir essa quantidade. Verifique recolhimentos posteriores.' };
+    state.storeStocks[receipt.storeId] = adjustedStock;
+
+    receipt.qtyCorrections = Array.isArray(receipt.qtyCorrections) ? receipt.qtyCorrections : [];
+    receipt.qtyCorrections.unshift({
+      id: randomId('corr'),
+      type: 'recebimento_promotor',
+      previousQty: oldQty,
+      newQty,
+      reason,
+      correctedBy: actor.name,
+      correctedById: actor.id,
+      correctedAt: nowIso(),
+    });
+    receipt.qty = newQty;
+    receipt.justification = receipt.justification ? `${receipt.justification}\nCorreção: ${reason}` : `Correção: ${reason}`;
+    receipt.updatedAt = nowIso();
+    receipt.updatedBy = actor.name;
+    receipt.updatedById = actor.id;
+    outbound.receivedQty = newQty;
+    outbound.updatedAt = nowIso();
+    outbound.updatedBy = actor.name;
+    outbound.updatedById = actor.id;
+
+    recalculateOutboundDivergences(outbound, `Correção do recebimento da loja: ${reason}`);
+    audit('Recebimento na Loja', 'Recebimento corrigido', `${actor.name} corrigiu ${getStoreById(receipt.storeId, state)?.name || '-'} de ${sumQty(oldQty)} para ${sumQty(newQty)} caixas. Motivo: ${reason}`);
+  }
+
   if (type === 'CONFIRM_RECEIPT') {
     if (!['admin', 'promoter'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou promotor pode confirmar recebimento.' };
     const outbound = state.movements.outbounds.find((item) => item.id === payload.outboundId);
     if (!outbound) return { ok: false, error: 'Saída não encontrada.' };
-    if (outbound.receiptId) return { ok: false, error: 'Esta saída já foi confirmada.' };
+    if (outbound.receiptId || state.movements.receipts.some((item) => isActiveMovement(item) && item.outboundId === outbound.id)) return { ok: false, error: 'Esta saída já foi confirmada. Para corrigir, use o botão Editar recebimento.' };
     const receiptStore = getStoreById(outbound.storeId, state);
     if (actor.role === 'promoter' && outbound.storeId !== actor.storeId) return { ok: false, error: 'Promotor só pode confirmar recebimento da própria loja.' };
     if (!storeRequiresPromoter(receiptStore)) return { ok: false, error: 'Esta loja não exige validação do promotor. A entrega deve ser validada somente pelo motorista.' };
-    const qty = sanitizeQty(payload.qty);
-    if (sumQty(qty) <= 0) return { ok: false, error: 'Informe a quantidade recebida.' };
+    const expectedQty = sanitizeQty(outbound.qty);
+    const expectedTotal = sumQty(expectedQty);
+    const totalReceived = payload.totalReceived !== undefined ? safeInt(payload.totalReceived) : sumQty(sanitizeQty(payload.qty));
+    if (totalReceived <= 0) return { ok: false, error: 'Informe o total de caixas recebidas.' };
+    const hasTotalDifference = totalReceived !== expectedTotal;
+    const qty = hasTotalDifference ? sanitizeQty(payload.qty) : expectedQty;
+    if (hasTotalDifference && sumQty(qty) !== totalReceived) {
+      return { ok: false, error: `O detalhamento precisa fechar com o total informado pelo promotor. Total informado: ${totalReceived}. Correto esperado para a loja: ${expectedQty.folhagens} folhagens e ${expectedQty.bandejas} bandejas.` };
+    }
 
     state.storeStocks[outbound.storeId] = addQty(getStoreStock(outbound.storeId, state), qty);
     const receipt = {
@@ -6068,7 +6467,10 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       outboundId: outbound.id,
       date: payload.date || todayStr(),
       storeId: outbound.storeId,
+      expectedQty,
+      totalReceived,
       qty,
+      hasDivergence: hasQtyDifference(expectedQty, qty),
       createdBy: actor.name,
       createdById: actor.id,
       createdAt: nowIso(),
@@ -6078,14 +6480,16 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     outbound.status = 'recebida';
     outbound.receivedQty = qty;
 
-    if (JSON.stringify(qty) !== JSON.stringify(sanitizeQty(outbound.qty))) {
+    if (hasQtyDifference(expectedQty, qty)) {
       openDivergence({
         type: 'recebimento_loja',
+        outboundId: outbound.id,
+        receiptId: receipt.id,
         date: receipt.date,
         routeId: outbound.routeId,
         driverId: outbound.driverId,
         storeId: outbound.storeId,
-        expectedQty: sanitizeQty(outbound.qty),
+        expectedQty,
         actualQty: qty,
         justification: payload.justification || 'Diferença identificada entre o CD e o recebimento da loja.',
         originJustification: payload.justification || '',
@@ -6097,7 +6501,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
         responsibleExplanationBy: null,
       });
     }
-    audit('Recebimento na Loja', 'Confirmação de recebimento', `Loja ${getStoreById(outbound.storeId, state)?.name || '-'} confirmou ${sumQty(qty)} caixas.`);
+    audit('Recebimento na Loja', 'Confirmação de recebimento', `Loja ${getStoreById(outbound.storeId, state)?.name || '-'} confirmou ${totalReceived} caixas. Correto esperado: ${expectedQty.folhagens} folhagens e ${expectedQty.bandejas} bandejas.`);
   }
 
 
@@ -6769,6 +7173,91 @@ function logout() {
   render();
 }
 
+function needsReliefDriverRouteSelection(user = currentUser, date = todayStr(), state = appState) {
+  return isReliefDriver(user) && !getReliefDriverAssignment(user, date, state);
+}
+
+function renderReliefDriverRouteSelection() {
+  const today = todayStr();
+  const routes = [...appState.routes].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const recentAssignments = (appState.reliefDriverAssignments || [])
+    .filter((item) => item.userId === currentUser.id)
+    .slice(0, 8);
+
+  return `
+    <div class="grid-2">
+      <div class="card">
+        <div class="page-header">
+          <div>
+            <h3>Caio, selecione a rota do dia</h3>
+            <p class="muted">Depois de confirmar, essa rota fica fixa para seu acesso durante todo o dia.</p>
+          </div>
+        </div>
+
+        <form id="form-rota-folguista" class="stack">
+          <input type="hidden" name="userId" value="${currentUser.id}" />
+          <label>Data
+            <input type="date" name="date" value="${today}" readonly required />
+          </label>
+          <label>Rota que será feita hoje
+            <select name="routeId" required>
+              <option value="">Selecione a rota</option>
+              ${routes.map((route) => `<option value="${route.id}">${route.name} • Motorista fixo: ${getUserById(route.driverId)?.name || '-'}</option>`).join('')}
+            </select>
+          </label>
+          <div class="alert-strip warning">
+            <span>Ao confirmar, você verá somente as lojas e movimentações da rota escolhida. A troca no mesmo dia só poderá ser feita pelo ADM.</span>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Confirmar rota do dia</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="section-header">
+          <div>
+            <h3>Histórico do folguista</h3>
+          </div>
+        </div>
+        <div class="list">
+          ${recentAssignments.length ? recentAssignments.map((item) => `
+            <div class="list-item">
+              <div class="list-item-head">
+                <strong>${formatDateBR(item.date)}</strong>
+                ${item.canceledAt ? '<span class="tag warn">Alterada</span>' : '<span class="tag ok">Ativa</span>'}
+              </div>
+              <div class="muted">Rota: ${getRouteById(item.routeId)?.name || item.routeName || '-'}</div>
+              <small class="muted">Confirmado por ${item.selectedBy || '-'} em ${formatDateTimeBR(item.selectedAt)}</small>
+            </div>
+          `).join('') : '<div class="empty">Nenhuma rota registrada para este folguista.</div>'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function bindReliefDriverRouteEvents() {
+  const form = document.getElementById('form-rota-folguista');
+  if (!form) return;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const route = getRouteById(form.routeId.value);
+    if (!route) {
+      showToast('Selecione a rota do dia.', 'error');
+      return;
+    }
+    const confirmed = window.confirm(`Confirmar ${route.name} como sua rota de hoje? Depois disso, somente o ADM poderá alterar.`);
+    if (!confirmed) return;
+    const result = await persistMutation('SET_RELIEF_DRIVER_ROUTE', {
+      userId: form.userId.value,
+      date: form.date.value || todayStr(),
+      routeId: form.routeId.value,
+    }, 'Rota do dia definida para o folguista.');
+    if (result.ok) render();
+  });
+}
+
 function render() {
   if (!currentUser) {
     els.loginScreen.classList.remove('hidden');
@@ -6799,6 +7288,15 @@ function render() {
 
   renderSidebar();
   renderMobileQuickNav();
+
+  if (needsReliefDriverRouteSelection(currentUser)) {
+    els.pageTitle.textContent = 'Selecionar rota do dia';
+    els.pageSubtitle.textContent = 'Motorista folguista precisa fixar a rota antes de usar o sistema';
+    els.mainContent.innerHTML = renderReliefDriverRouteSelection();
+    bindReliefDriverRouteEvents();
+    return;
+  }
+
   renderCurrentView();
 }
 
@@ -6917,6 +7415,8 @@ function getEffectiveDriver(routeId, date = todayStr(), storeId = null, state = 
     const exception = state.movements.routeExceptions.find((item) => item.storeId === storeId && item.date === date);
     if (exception?.newDriverId) return exception.newDriverId;
   }
+  const reliefAssignment = getReliefAssignmentForRoute(routeId, date, state);
+  if (reliefAssignment?.userId) return reliefAssignment.userId;
   return getRouteById(routeId, state)?.driverId || null;
 }
 
@@ -6924,25 +7424,27 @@ function canSeeGlobalData(user = currentUser) {
   return !!user && ['admin', 'viewer'].includes(user.role);
 }
 
-function getDriverRouteIds(user = currentUser, state = appState) {
+function getDriverRouteIds(user = currentUser, state = appState, date = todayStr()) {
   if (!user || user.role !== 'driver') return [];
   const ids = new Set();
-  if (user.routeId) ids.add(user.routeId);
+  const effectiveRouteId = getEffectiveDriverRouteId(user, date, state);
+  if (effectiveRouteId) ids.add(effectiveRouteId);
+  if (!isReliefDriver(user) && user.routeId) ids.add(user.routeId);
   state.routes.forEach((route) => {
     if (route.driverId === user.id) ids.add(route.id);
   });
-  if (isGoianiaTrunkUser(user)) {
+  if (isGoianiaTrunkUser(user, date, state)) {
     GOIANIA_ROUTE_IDS.forEach((id) => ids.add(id));
     ids.add(GOIANIA_TRUNK_ROUTE_ID);
   }
   return [...ids];
 }
 
-function canUserSeeRoute(routeId, user = currentUser, state = appState) {
+function canUserSeeRoute(routeId, user = currentUser, state = appState, date = todayStr()) {
   if (!user || !routeId) return false;
   if (canSeeGlobalData(user)) return true;
   if (user.role === 'cd') return false;
-  if (user.role === 'driver') return getDriverRouteIds(user, state).includes(routeId);
+  if (user.role === 'driver') return getDriverRouteIds(user, state, date).includes(routeId);
   if (user.role === 'promoter' && user.storeId) {
     const store = getStoreById(user.storeId, state);
     return !!store && (store.defaultRouteId === routeId || store.sundayRouteId === routeId);
@@ -6957,9 +7459,9 @@ function canUserSeeStore(storeId, user = currentUser, date = todayStr(), state =
   if (canSeeGlobalData(user)) return true;
   if (user.role === 'promoter') return user.storeId === storeId;
   if (user.role === 'driver') {
-    if (storeId === SUPPORT_POINT_STORE_ID && isGoianiaTrunkUser(user)) return true;
+    if (storeId === SUPPORT_POINT_STORE_ID && isGoianiaTrunkUser(user, date, state)) return true;
     const routeId = getEffectiveRoute(storeId, date, state);
-    if (canUserSeeRoute(routeId, user, state)) return true;
+    if (canUserSeeRoute(routeId, user, state, date)) return true;
     return (state.movements.goianiaTransfers || []).some((item) =>
       isActiveMovement(item) && item.storeId === storeId && item.driverId === user.id && (!date || item.date === date)
     );
@@ -6979,7 +7481,7 @@ function getVisibleStores(state = appState, user = currentUser, date = todayStr(
 function getVisibleRoutes(state = appState, user = currentUser) {
   if (!user) return [];
   if (canSeeGlobalData(user)) return state.routes;
-  if (user.role === 'driver') return state.routes.filter((route) => canUserSeeRoute(route.id, user, state));
+  if (user.role === 'driver') return state.routes.filter((route) => canUserSeeRoute(route.id, user, state, todayStr()));
   if (user.role === 'promoter' && user.storeId) {
     const store = getStoreById(user.storeId, state);
     const ids = new Set([store?.defaultRouteId, store?.sundayRouteId].filter(Boolean));
@@ -6995,9 +7497,36 @@ function isMovementVisibleToUser(item, user = currentUser, state = appState) {
   if (user.role === 'promoter') return item.storeId === user.storeId;
   if (user.role === 'driver') {
     if (item.driverId === user.id || item.originalDriverId === user.id || item.goianiaTransferDriverId === user.id) return true;
-    if (item.routeId && canUserSeeRoute(item.routeId, user, state)) return true;
+    if (item.routeId && canUserSeeRoute(item.routeId, user, state, item.date || todayStr())) return true;
     if (item.storeId && canUserSeeStore(item.storeId, user, item.date || todayStr(), state)) return true;
   }
+  return false;
+}
+
+
+function canEditOutboundMovement(item, user = currentUser, state = appState) {
+  if (!item || !isActiveMovement(item) || item.status === 'historico') return false;
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  if (user.role === 'cd') {
+    return item.createdById ? item.createdById === user.id : item.createdBy === user.name;
+  }
+  return false;
+}
+
+function canEditDriverDeliveryMovement(item, user = currentUser, state = appState) {
+  if (!item || !isActiveMovement(item)) return false;
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  if (user.role === 'driver') return item.driverId === user.id || item.createdById === user.id;
+  return false;
+}
+
+function canEditReceiptMovement(item, user = currentUser, state = appState) {
+  if (!item || !isActiveMovement(item)) return false;
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  if (user.role === 'promoter') return item.storeId === user.storeId || item.createdById === user.id;
   return false;
 }
 
@@ -7006,7 +7535,7 @@ function isDivergenceVisibleToUser(div, user = currentUser, state = appState) {
   if (canSeeGlobalData(user)) return true;
   if (user.role === 'cd') return ['retorno_cd', 'inventario_cd', 'carga_goiania'].includes(div.type);
   if (user.role === 'driver') {
-    return div.driverId === user.id || div.responsibleUserId === user.id || canUserSeeRoute(div.routeId, user, state) || canUserSeeStore(div.storeId, user, div.date || todayStr(), state);
+    return div.driverId === user.id || div.responsibleUserId === user.id || canUserSeeRoute(div.routeId, user, state, div.date || todayStr()) || canUserSeeStore(div.storeId, user, div.date || todayStr(), state);
   }
   if (user.role === 'promoter') return div.storeId === user.storeId || div.responsibleUserId === user.id;
   return false;
@@ -7027,9 +7556,29 @@ function getPermissionLabel(user, state = appState) {
   return 'Permissão padrão do perfil';
 }
 
+function getCompanyBoxTotals(state = appState) {
+  const cdQty = getCdStock(state);
+  const storeQty = getActiveStores(state).reduce((acc, store) => addQty(acc, getStoreStock(store.id, state)), emptyQty());
+  const inReturnQty = (state.movements.pickups || [])
+    .filter((item) => isActiveMovement(item) && !item.returnBatchId && !item.supportPointDropId)
+    .reduce((acc, item) => addQty(acc, item.totalOnly ? buildQtyFromTotal(safeInt(item.totalQty), item.qty || emptyQty()) : sanitizeQty(item.qty)), emptyQty());
+  const byType = addQty(addQty(cdQty, storeQty), inReturnQty);
+  return {
+    cd: sumQty(cdQty),
+    stores: sumQty(storeQty),
+    inReturn: sumQty(inReturnQty),
+    total: sumQty(byType),
+    byType,
+    cdQty,
+    storeQty,
+    inReturnQty,
+  };
+}
+
 function getTodayMetrics(state = appState, user = currentUser) {
   const today = todayStr();
-  const inScope = (item) => isMovementVisibleToUser(item, user, state);
+  const scopeUser = user?.role === 'promoter' ? { role: 'viewer' } : user;
+  const inScope = (item) => isMovementVisibleToUser(item, scopeUser, state);
   const outbounds = state.movements.outbounds.filter((item) => isActiveMovement(item) && item.date === today && item.status !== 'historico' && inScope(item));
   const receipts = state.movements.receipts.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
   const pickupsToday = state.movements.pickups.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
@@ -7038,10 +7587,15 @@ function getTodayMetrics(state = appState, user = currentUser) {
   const confirmed = receipts.reduce((acc, item) => acc + sumQty(item.qty), 0);
   const pickups = pickupsToday.reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
   const returns = returnsToday.reduce((acc, item) => acc + sumQty(item.qty), 0);
-  const company = (user?.role === 'promoter' || user?.role === 'driver') ? 0 : sumQty(state.cdStock);
+  const companyTotals = getCompanyBoxTotals(state);
+  const company = user?.role === 'driver' ? 0 : (user?.role === 'promoter' ? companyTotals.total : sumQty(state.cdStock));
   const visibleStores = getVisibleStores(state, user, today);
-  const stores = visibleStores.reduce((acc, store) => acc + sumQty(getStoreStock(store.id, state)), 0);
-  const inReturn = state.movements.pickups.filter((item) => isActiveMovement(item) && !item.returnBatchId && inScope(item)).reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
+  const stores = user?.role === 'promoter'
+    ? visibleStores.reduce((acc, store) => acc + sumQty(getStoreStock(store.id, state)), 0)
+    : visibleStores.reduce((acc, store) => acc + sumQty(getStoreStock(store.id, state)), 0);
+  const inReturn = user?.role === 'promoter'
+    ? companyTotals.inReturn
+    : state.movements.pickups.filter((item) => isActiveMovement(item) && !item.returnBatchId && inScope(item)).reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
   return { sent, confirmed, pickups, returns, company, stores, inReturn };
 }
 
@@ -7416,6 +7970,159 @@ function openDivergenceDetails(id) {
   });
 }
 
+
+function getCorrectionContext(kind, id) {
+  if (kind === 'outbound') {
+    const item = appState.movements.outbounds.find((movement) => movement.id === id);
+    if (!item) return null;
+    const store = getStoreById(item.storeId);
+    return {
+      item,
+      qty: sanitizeQty(item.qty),
+      title: 'Corrigir saída do CD',
+      subtitle: `${formatDateBR(item.date)} • ${formatStoreNameForUser(store?.name || '-')} • ${getRouteById(item.routeId)?.name || '-'}`,
+      note: 'A correção ajusta o saldo do CD e recalcula as divergências dessa loja automaticamente.',
+      mutationType: 'UPDATE_OUTBOUND_QTY',
+      payloadIdKey: 'outboundId',
+      allowed: canEditOutboundMovement(item, currentUser, appState),
+    };
+  }
+
+  if (kind === 'driverDelivery') {
+    const item = appState.movements.driverDeliveries.find((movement) => movement.id === id);
+    if (!item) return null;
+    const store = getStoreById(item.storeId);
+    return {
+      item,
+      qty: sanitizeQty(item.actualQty),
+      title: 'Corrigir entrega do motorista',
+      subtitle: `${formatDateBR(item.date)} • ${formatStoreNameForUser(store?.name || '-')} • ${getRouteById(item.routeId)?.name || '-'}`,
+      note: 'A correção atualiza a quantidade deixada na loja e recalcula a divergência entre CD e motorista.',
+      mutationType: 'UPDATE_DRIVER_DELIVERY_QTY',
+      payloadIdKey: 'driverDeliveryId',
+      allowed: canEditDriverDeliveryMovement(item, currentUser, appState),
+    };
+  }
+
+  if (kind === 'receipt') {
+    const item = appState.movements.receipts.find((movement) => movement.id === id);
+    if (!item) return null;
+    const store = getStoreById(item.storeId);
+    return {
+      item,
+      qty: sanitizeQty(item.qty),
+      title: 'Corrigir recebimento do promotor',
+      subtitle: `${formatDateBR(item.date)} • ${formatStoreNameForUser(store?.name || '-')}`,
+      note: 'A correção ajusta o estoque da loja e recalcula a divergência entre CD/motorista/promotor.',
+      mutationType: 'UPDATE_RECEIPT_QTY',
+      payloadIdKey: 'receiptId',
+      allowed: canEditReceiptMovement(item, currentUser, appState),
+    };
+  }
+
+  return null;
+}
+
+function renderMovementCorrectionModal(kind, id) {
+  const ctx = getCorrectionContext(kind, id);
+  if (!ctx || !ctx.allowed) {
+    return '';
+  }
+  const prefix = `correction-${kind}`;
+  return `
+    <div class="modal-backdrop" id="movement-correction-modal">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="movement-correction-title">
+        <div class="modal-header">
+          <div>
+            <h3 id="movement-correction-title">${ctx.title}</h3>
+            <p>${ctx.subtitle}</p>
+          </div>
+          <button type="button" class="icon-btn modal-close" title="Fechar">×</button>
+        </div>
+
+        <form id="form-movement-correction" class="stack" data-kind="${kind}" data-id="${id}" data-prefix="${prefix}">
+          <div class="helper-card compact small">${ctx.note}</div>
+          ${qtyInputs(prefix, ctx.qty)}
+          <div class="helper-card compact small">Total corrigido: <strong id="movement-correction-total">${sumQty(ctx.qty)}</strong> caixas</div>
+          <label>Motivo da correção
+            <textarea name="reason" required placeholder="Ex.: erro de digitação, contagem corrigida, lançamento feito na loja errada, conferência posterior..."></textarea>
+          </label>
+          <div class="form-actions modal-actions">
+            <button type="submit" class="btn btn-primary">Salvar correção</button>
+            <button type="button" class="btn btn-ghost modal-close">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function openMovementCorrectionModal(kind, id) {
+  const ctx = getCorrectionContext(kind, id);
+  if (!ctx) {
+    showToast('Lançamento não encontrado para correção.', 'error');
+    return;
+  }
+  if (!ctx.allowed) {
+    showToast('Seu usuário não tem permissão para corrigir este lançamento.', 'error');
+    return;
+  }
+
+  const oldModal = document.getElementById('movement-correction-modal');
+  if (oldModal) oldModal.remove();
+
+  document.body.insertAdjacentHTML('beforeend', renderMovementCorrectionModal(kind, id));
+  const modal = document.getElementById('movement-correction-modal');
+  const form = document.getElementById('form-movement-correction');
+  const prefix = form?.dataset.prefix;
+  const totalEl = document.getElementById('movement-correction-total');
+  const closeModal = () => modal?.remove();
+
+  modal.querySelectorAll('.modal-close').forEach((button) => button.addEventListener('click', closeModal));
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) closeModal();
+  });
+
+  const refreshTotal = () => {
+    if (!form || !prefix || !totalEl) return;
+    totalEl.textContent = sumQty(readQtyFromForm(form, prefix));
+  };
+  BOX_TYPES.forEach((item) => {
+    form?.querySelector(`#${prefix}-${item.key}`)?.addEventListener('input', refreshTotal);
+  });
+  refreshTotal();
+
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const updatedCtx = getCorrectionContext(kind, id);
+    if (!updatedCtx) {
+      showToast('Lançamento não encontrado para correção.', 'error');
+      return;
+    }
+    const qty = readQtyFromForm(form, prefix);
+    const reason = form.reason.value.trim();
+    const payload = {
+      [updatedCtx.payloadIdKey]: id,
+      qty,
+      reason,
+    };
+    const result = await persistMutation(updatedCtx.mutationType, payload, 'Correção salva e divergências recalculadas.');
+    if (result.ok) closeModal();
+  });
+}
+
+function bindMovementCorrectionEvents() {
+  document.querySelectorAll('.btn-edit-outbound').forEach((button) => {
+    button.addEventListener('click', () => openMovementCorrectionModal('outbound', button.dataset.id));
+  });
+  document.querySelectorAll('.btn-edit-driver-delivery').forEach((button) => {
+    button.addEventListener('click', () => openMovementCorrectionModal('driverDelivery', button.dataset.id));
+  });
+  document.querySelectorAll('.btn-edit-receipt').forEach((button) => {
+    button.addEventListener('click', () => openMovementCorrectionModal('receipt', button.dataset.id));
+  });
+}
+
 function statusTag(type) {
   const map = {
     ok: '<span class="tag ok">OK</span>',
@@ -7440,7 +8147,8 @@ function getOutboundTransfer(outboundId, state = appState) {
 function getOutboundResponsibleDriver(outbound, state = appState) {
   if (!outbound) return null;
   const transfer = getOutboundTransfer(outbound.id, state);
-  return transfer?.driverId || outbound.goianiaTransferDriverId || outbound.driverId || null;
+  const reliefAssignment = getReliefAssignmentForRoute(outbound.routeId, outbound.date || todayStr(), state);
+  return transfer?.driverId || outbound.goianiaTransferDriverId || reliefAssignment?.userId || outbound.driverId || null;
 }
 
 function getMovementKindLabel(type) {
@@ -7793,16 +8501,20 @@ function renderDashboard() {
   const alerts = getAllAlerts().slice(0, 4);
   const visibleDivergences = getVisibleDivergences(appState, currentUser);
   const openDivergences = visibleDivergences.filter((item) => item.status === 'aberta').length;
-  const stockRows = getStoreStockRows().slice(0, 5);
-  const routesForDashboard = canSeeGlobalData(currentUser) || currentUser.role === 'cd' ? appState.routes : getVisibleRoutes(appState, currentUser);
+  const promoterCompanyDashboard = currentUser?.role === 'promoter';
+  const stockRowsUser = promoterCompanyDashboard ? { role: 'viewer' } : currentUser;
+  const stockRows = getStoreStockRows(appState, stockRowsUser).slice(0, 5);
+  const routesForDashboard = canSeeGlobalData(currentUser) || currentUser.role === 'cd' || promoterCompanyDashboard ? appState.routes : getVisibleRoutes(appState, currentUser);
   const showCdForecast = ['admin', 'viewer', 'cd'].includes(currentUser?.role);
   const visibleStoreQty = getVisibleStores(appState, currentUser).reduce((acc, store) => addQty(acc, getStoreStock(store.id)), emptyQty());
-  const dashboardCategoryQty = showCdForecast ? appState.cdStock : visibleStoreQty;
+  const companyBoxTotals = getCompanyBoxTotals(appState);
+  const dashboardMovementUser = promoterCompanyDashboard ? { role: 'viewer' } : currentUser;
+  const dashboardCategoryQty = promoterCompanyDashboard ? companyBoxTotals.byType : (showCdForecast ? appState.cdStock : visibleStoreQty);
   const dashboardCategoryTotal = Math.max(1, sumQty(dashboardCategoryQty));
   const routeSummary = routesForDashboard.map((route) => {
-    const sent = appState.movements.outbounds.filter((item) => item.date === todayStr() && item.routeId === route.id && item.status !== 'historico' && isMovementVisibleToUser(item, currentUser, appState)).reduce((acc, item) => acc + sumQty(item.qty), 0);
-    const pickup = appState.movements.pickups.filter((item) => item.date === todayStr() && item.routeId === route.id && isMovementVisibleToUser(item, currentUser, appState)).reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
-    const returned = appState.movements.returns.filter((item) => item.date === todayStr() && item.routeId === route.id && isMovementVisibleToUser(item, currentUser, appState)).reduce((acc, item) => acc + sumQty(item.qty), 0);
+    const sent = appState.movements.outbounds.filter((item) => item.date === todayStr() && item.routeId === route.id && item.status !== 'historico' && isMovementVisibleToUser(item, dashboardMovementUser, appState)).reduce((acc, item) => acc + sumQty(item.qty), 0);
+    const pickup = appState.movements.pickups.filter((item) => item.date === todayStr() && item.routeId === route.id && isMovementVisibleToUser(item, dashboardMovementUser, appState)).reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
+    const returned = appState.movements.returns.filter((item) => item.date === todayStr() && item.routeId === route.id && isMovementVisibleToUser(item, dashboardMovementUser, appState)).reduce((acc, item) => acc + sumQty(item.qty), 0);
     const diff = pickup - returned;
     return { route, sent, pickup, returned, diff };
   });
@@ -7826,21 +8538,31 @@ function renderDashboard() {
           </div>
           ${statusTag(metrics.company < forecast.predicted + appState.settings.safetyMargin ? 'warn' : 'ok')}
         </div>
-      `) : `
+      `) : (promoterCompanyDashboard ? `
+        <div class="alert-strip info">
+          <div>
+            <strong>Visão geral de caixas da empresa</strong>
+            <div class="muted">Total considerando CD, lojas e caixas em retorno: ${companyBoxTotals.total} caixas.</div>
+          </div>
+          ${statusTag(companyBoxTotals.total > 0 ? 'ok' : 'warn')}
+        </div>
+      ` : `
         <div class="alert-strip info">
           <div>
             <strong>Visão do seu acesso</strong>
             <div class="muted">Esta tela mostra somente as informações vinculadas ao seu usuário.</div>
           </div>
         </div>
-      `}
+      `)}
 
       <div class="cards-grid">
         ${showCdForecast ? renderMetricCard('Caixas na Empresa', metrics.company, '🏭', metrics.company < forecast.predicted ? 'critical' : 'success', 'Saldo atual confirmado no CD') : ''}
+        ${promoterCompanyDashboard ? renderMetricCard('Caixas Totais da Empresa', companyBoxTotals.total, '🏭', companyBoxTotals.total ? 'success' : 'warning', 'CD + lojas + caixas em retorno') : ''}
         ${renderMetricCard('Enviadas Hoje', metrics.sent, '🚚', 'success', 'Saídas lançadas pelo CD')}
         ${renderMetricCard('Confirmadas nas Lojas', metrics.confirmed, '🏬', 'success', 'Recebimentos confirmados pelos promotores')}
-        ${renderMetricCard(currentUser.role === 'promoter' ? 'Estoque da Minha Loja' : 'Estoque Visível', metrics.stores, '📦', 'warning', 'Saldo dentro da permissão do usuário')}
-        ${renderMetricCard('Em Retorno', metrics.inReturn, '🔄', 'warning', 'Caixas recolhidas ainda não recebidas no CD')}
+        ${renderMetricCard(currentUser.role === 'promoter' ? 'Estoque da Minha Loja' : 'Estoque Visível', metrics.stores, '📦', 'warning', currentUser.role === 'promoter' ? 'Saldo atual da loja vinculada ao promotor' : 'Saldo dentro da permissão do usuário')}
+        ${promoterCompanyDashboard ? renderMetricCard('Estoque em Lojas da Empresa', companyBoxTotals.stores, '🏬', 'warning', 'Total acumulado em todas as lojas') : ''}
+        ${renderMetricCard('Em Retorno', metrics.inReturn, '🔄', 'warning', promoterCompanyDashboard ? 'Total de caixas da empresa em retorno' : 'Caixas recolhidas ainda não recebidas no CD')}
         ${renderMetricCard('Recebidas Hoje', metrics.returns, '✅', 'success', 'Caixas que retornaram ao CD')}
         ${renderMetricCard('Divergências Abertas', openDivergences, '⚠️', openDivergences ? 'critical' : 'success', 'Erros identificados automaticamente')}
         ${showCdForecast ? renderMetricCard('Base do Dia', forecast.predicted, '📊', 'success', `${forecast.source} de necessidade para ${weekdayName(forecast.weekday)}`) : ''}
@@ -7851,7 +8573,7 @@ function renderDashboard() {
           <div class="section-header">
             <div>
               <h3>Saldos por Categoria de Caixa</h3>
-              <p>${showCdForecast ? 'Saldo atual confirmado no CD por folhagens e bandejas.' : 'Saldo visível para seu acesso por folhagens e bandejas.'}</p>
+              <p>${promoterCompanyDashboard ? 'Saldo total da empresa por folhagens e bandejas.' : (showCdForecast ? 'Saldo atual confirmado no CD por folhagens e bandejas.' : 'Saldo visível para seu acesso por folhagens e bandejas.')}</p>
             </div>
           </div>
           <div class="list">
@@ -7872,7 +8594,7 @@ function renderDashboard() {
           <div class="section-header">
             <div>
               <h3>Estoque em Loja (Top 5)</h3>
-              <p>Lojas com mais caixas acumuladas.</p>
+              <p>${promoterCompanyDashboard ? 'Lojas da empresa com mais caixas acumuladas.' : 'Lojas com mais caixas acumuladas.'}</p>
             </div>
           </div>
           <div class="list">
@@ -8193,6 +8915,7 @@ function renderSaidas() {
                 <th>Separador</th>
                 <th>Total</th>
                 <th>Status</th>
+                <th>Ação</th>
               </tr>
             </thead>
             <tbody>
@@ -8205,8 +8928,9 @@ function renderSaidas() {
                   <td>${escapeHtml(item.separator || getStoreSeparator(getStoreById(item.storeId)) || '-')}</td>
                   <td>${sumQty(item.qty)}</td>
                   <td>${item.receiptId ? statusTag('ok') : statusTag('warn')}</td>
+                  <td>${canEditOutboundMovement(item) ? `<button type="button" class="btn btn-secondary btn-edit-outbound" data-id="${item.id}">Editar</button>` : '-'}</td>
                 </tr>
-              `).join('') : `<tr><td colspan="7" class="center muted">Nenhuma saída registrada.</td></tr>`}
+              `).join('') : `<tr><td colspan="8" class="center muted">Nenhuma saída registrada.</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -8215,11 +8939,11 @@ function renderSaidas() {
   `;
 }
 function renderEntregasMotorista() {
-  const myRouteId = currentUser.role === 'driver' ? currentUser.routeId : '';
+  const driverRouteIds = currentUser.role === 'driver' ? getDriverRouteIds(currentUser, appState, todayStr()) : [];
   const pending = appState.movements.outbounds.filter((item) => {
-    if (!isActiveMovement(item) || item.status === 'historico' || item.driverDeliveryId) return false;
+    if (!isActiveMovement(item) || item.status === 'historico' || item.driverDeliveryId || (appState.movements.driverDeliveries || []).some((delivery) => isActiveMovement(delivery) && delivery.outboundId === item.id)) return false;
     if (currentUser.role === 'driver') {
-      return item.driverId === currentUser.id || item.routeId === myRouteId || getOutboundResponsibleDriver(item) === currentUser.id;
+      return item.driverId === currentUser.id || driverRouteIds.includes(item.routeId) || getOutboundResponsibleDriver(item) === currentUser.id;
     }
     return true;
   }).slice(0, 80);
@@ -8286,6 +9010,7 @@ function renderEntregasMotorista() {
               <div class="muted">Motorista: ${getUserById(item.driverId)?.name || item.createdBy || '-'}</div>
               <div class="kpi-row"><span>Total deixado</span><strong>${item.totalDelivered} caixas</strong></div>
               <small class="muted">Correto esperado: ${item.expectedQty.folhagens} folhagens + ${item.expectedQty.bandejas} bandejas = ${sumQty(item.expectedQty)} caixas</small>
+              ${canEditDriverDeliveryMovement(item) ? `<div class="form-actions"><button type="button" class="btn btn-secondary btn-edit-driver-delivery" data-id="${item.id}">Editar entrega</button></div>` : ''}
             </div>
           `).join('') : `<div class="empty">Nenhuma validação registrada ainda.</div>`}
         </div>
@@ -8298,7 +9023,7 @@ function renderRecebimentos() {
   const storeFilter = currentUser.role === 'promoter' ? currentUser.storeId : '';
   const pending = appState.movements.outbounds.filter((item) => {
     const store = getStoreById(item.storeId);
-    return isActiveMovement(item) && !item.receiptId && item.status !== 'historico' && storeRequiresPromoter(store) && (!storeFilter || item.storeId === storeFilter);
+    return isActiveMovement(item) && !item.receiptId && !(appState.movements.receipts || []).some((receipt) => isActiveMovement(receipt) && receipt.outboundId === item.id) && item.status !== 'historico' && storeRequiresPromoter(store) && (!storeFilter || item.storeId === storeFilter);
   });
   return `
     <div class="grid-2">
@@ -8323,11 +9048,22 @@ function renderRecebimentos() {
 
           <div id="recebimento-resumo" class="helper-card compact small">Selecione a saída.</div>
 
+          <label>Total de caixas que chegaram na loja
+            <input type="number" min="0" step="1" name="totalReceived" id="recebimento-total" required />
+          </label>
 
-          ${qtyInputs('recebimento')}
+          <div id="recebimento-detalhe" class="driver-detail-panel hidden">
+            <div class="alert-strip warning">
+              <div>
+                <strong>Divergência identificada</strong>
+                <p id="recebimento-alerta" class="muted">Informe quantas caixas de folhagens e quantas caixas de bandejas chegaram.</p>
+              </div>
+            </div>
+            ${qtyInputs('recebimento')}
+          </div>
 
           <label>Observação / justificativa
-            <textarea name="justification" placeholder="Preencha somente se houver diferença ou alguma ocorrência."></textarea>
+            <textarea name="justification" placeholder="Obrigatório quando houver diferença ou alguma ocorrência."></textarea>
           </label>
 
           <div class="form-actions">
@@ -8353,6 +9089,7 @@ function renderRecebimentos() {
                 </div>
                 <div class="muted">Saída original: ${sumQty(outbound?.qty || emptyQty())} caixas</div>
                 <div class="kpi-row"><span>Confirmado</span><strong>${sumQty(item.qty)} caixas</strong></div>
+                ${canEditReceiptMovement(item) ? `<div class="form-actions"><button type="button" class="btn btn-secondary btn-edit-receipt" data-id="${item.id}">Editar recebimento</button></div>` : ''}
               </div>
             `;
           }).join('') : `<div class="empty">Nenhum recebimento confirmado hoje.</div>`}
@@ -8363,10 +9100,17 @@ function renderRecebimentos() {
 }
 
 function renderRecolhimentos() {
-  const myRouteId = currentUser.role === 'driver' ? currentUser.routeId : '';
+  const networkFilter = '';
   const availableRoutes = currentUser.role === 'driver'
-    ? appState.routes.filter((route) => route.id === myRouteId)
+    ? getVisibleRoutes(appState, currentUser)
     : appState.routes;
+  const fixedRouteId = currentUser.role === 'driver' && availableRoutes.length === 1 ? availableRoutes[0].id : '';
+  const driverOptions = currentUser.role === 'driver'
+    ? `<option value="${currentUser.id}" selected>${currentUser.name}</option>`
+    : availableRoutes.map((route) => {
+      const driver = getUserById(route.driverId);
+      return `<option value="${route.driverId}">${driver?.name || '-'}</option>`;
+    }).join('');
 
   return `
     <div class="grid-2">
@@ -8385,16 +9129,13 @@ function renderRecolhimentos() {
             <label>Rota
               <select name="routeId" id="pickup-route" required>
                 <option value="">Selecione</option>
-                ${availableRoutes.map((route) => `<option value="${route.id}">${route.name}</option>`).join('')}
+                ${availableRoutes.map((route) => `<option value="${route.id}" ${route.id === fixedRouteId ? 'selected' : ''}>${route.name}</option>`).join('')}
               </select>
             </label>
             <label>Motorista
               <select name="driverId" id="pickup-driver" required>
                 <option value="">Selecione</option>
-                ${availableRoutes.map((route) => {
-                  const driver = getUserById(route.driverId);
-                  return `<option value="${route.driverId}">${driver?.name || '-'}</option>`;
-                }).join('')}
+                ${driverOptions}
               </select>
             </label>
           </div>
@@ -8468,7 +9209,15 @@ function renderRecolhimentos() {
 
 function renderCaixasOcupadas() {
   const today = todayStr();
+  const networkFilter = '';
   const availableRoutes = getVisibleRoutes(appState, currentUser);
+  const fixedRouteId = currentUser.role === 'driver' && availableRoutes.length === 1 ? availableRoutes[0].id : '';
+  const driverOptions = currentUser.role === 'driver'
+    ? `<option value="${currentUser.id}" selected>${currentUser.name}</option>`
+    : availableRoutes.map((route) => {
+      const driver = getUserById(route.driverId);
+      return `<option value="${route.driverId}">${driver?.name || '-'}</option>`;
+    }).join('');
   const visibleRecords = (appState.movements.occupiedBoxes || [])
     .filter((item) => isActiveMovement(item) && isMovementVisibleToUser(item, currentUser, appState))
     .slice(0, 80);
@@ -8490,16 +9239,13 @@ function renderCaixasOcupadas() {
             <label>Rota
               <select name="routeId" id="occupied-route" required>
                 <option value="">Selecione</option>
-                ${availableRoutes.map((route) => `<option value="${route.id}">${route.name}</option>`).join('')}
+                ${availableRoutes.map((route) => `<option value="${route.id}" ${route.id === fixedRouteId ? 'selected' : ''}>${route.name}</option>`).join('')}
               </select>
             </label>
             <label>Motorista
               <select name="driverId" id="occupied-driver" required>
                 <option value="">Selecione</option>
-                ${availableRoutes.map((route) => {
-                  const driver = getUserById(route.driverId);
-                  return `<option value="${route.driverId}">${driver?.name || '-'}</option>`;
-                }).join('')}
+                ${driverOptions}
               </select>
             </label>
           </div>
@@ -10320,6 +11066,7 @@ function renderUsuarios() {
   const sortedUsers = [...appState.users].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   const sortedStores = getActiveStores().sort((a, b) => formatStoreNameForUser(a.name).localeCompare(formatStoreNameForUser(b.name), 'pt-BR'));
   const sortedRoutes = [...appState.routes].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const reliefUsers = sortedUsers.filter((user) => isReliefDriver(user));
   const roleOptions = Object.entries(ROLE_LABELS).map(([key, label]) => `<option value="${key}">${label}</option>`).join('');
   const buildStoreOptions = (selectedId) => `
     <option value="">Selecione a loja</option>
@@ -10402,6 +11149,56 @@ function renderUsuarios() {
       <div class="card">
         <div class="page-header">
           <div>
+            <h3>Motorista folguista</h3>
+            <p class="muted">Controle a rota diária do Caio ou de outro folguista. O motorista só consegue escolher uma vez por dia; o ADM pode corrigir.</p>
+          </div>
+        </div>
+        ${reliefUsers.length ? `
+          <form id="form-folguista-rota-adm" class="stack">
+            <div class="form-grid-3">
+              <label>Folguista
+                <select name="userId" required>
+                  ${reliefUsers.map((user) => `<option value="${user.id}">${user.name} • ${user.username}</option>`).join('')}
+                </select>
+              </label>
+              <label>Data
+                <input type="date" name="date" value="${todayStr()}" required />
+              </label>
+              <label>Rota do dia
+                <select name="routeId" required>
+                  ${buildRouteOptions('')}
+                </select>
+              </label>
+            </div>
+            <label>Motivo da alteração pelo ADM
+              <input type="text" name="reason" placeholder="Ex.: folga do motorista fixo / correção de rota escolhida errada" />
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-secondary">Definir/alterar rota do folguista</button>
+            </div>
+          </form>
+          <div class="table-wrap" style="margin-top:14px">
+            <table>
+              <thead><tr><th>Data</th><th>Folguista</th><th>Rota</th><th>Status</th><th>Definido por</th></tr></thead>
+              <tbody>
+                ${(appState.reliefDriverAssignments || []).filter((item) => reliefUsers.some((user) => user.id === item.userId)).slice(0, 12).map((item) => `
+                  <tr>
+                    <td>${formatDateBR(item.date)}</td>
+                    <td>${getUserById(item.userId)?.name || item.userName || '-'}</td>
+                    <td>${getRouteById(item.routeId)?.name || item.routeName || '-'}</td>
+                    <td>${item.canceledAt ? '<span class="tag warn">Substituída</span>' : '<span class="tag ok">Ativa</span>'}</td>
+                    <td>${item.selectedBy || '-'}</td>
+                  </tr>
+                `).join('') || '<tr><td colspan="5" class="center muted">Nenhuma rota de folguista definida ainda.</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        ` : '<div class="empty">Nenhum motorista folguista cadastrado.</div>'}
+      </div>
+
+      <div class="card">
+        <div class="page-header">
+          <div>
             <h3>Usuários cadastrados</h3>
           </div>
         </div>
@@ -10445,10 +11242,10 @@ function renderUsuarios() {
                       <select class="user-store-select user-target-select ${user.role === 'promoter' ? '' : 'hidden'}" data-user-id="${user.id}">
                         ${buildStoreOptions(user.storeId || '')}
                       </select>
-                      <select class="user-route-select user-target-select ${user.role === 'driver' ? '' : 'hidden'}" data-user-id="${user.id}">
+                      <select class="user-route-select user-target-select ${user.role === 'driver' && !isReliefDriver(user) ? '' : 'hidden'}" data-user-id="${user.id}">
                         ${buildRouteOptions(user.routeId || '')}
                       </select>
-                      <span class="user-target-static ${user.role === 'promoter' || user.role === 'driver' ? 'hidden' : ''}" data-user-id="${user.id}">${getUserAccessTarget(user)}</span>
+                      <span class="user-target-static ${user.role === 'promoter' || (user.role === 'driver' && !isReliefDriver(user)) ? 'hidden' : ''}" data-user-id="${user.id}">${getUserAccessTarget(user)}</span>
                     </div>
                   </td>
                   <td data-label="Usuário de login">
@@ -10546,6 +11343,7 @@ function bindViewEvents() {
   if (currentView === 'inventario') bindInventarioEvents();
   if (currentView === 'divergencias') bindDivergenciasEvents();
   if (currentView === 'usuarios') bindUsuariosEvents();
+  bindMovementCorrectionEvents();
 }
 
 function bindFechamentoEvents() {
@@ -10680,9 +11478,14 @@ function bindSaidasEvents() {
       return;
     }
     const qty = readQtyFromForm(form, 'saida');
+    if (getActiveOutboundForStoreDate(storeId, date, appState)) {
+      showToast('Esta loja já teve lançamento de entrega nessa data. Para corrigir a quantidade, use Editar em Saídas recentes.', 'error');
+      refreshStoreOptions();
+      return;
+    }
     const conflicts = getOutboundQtyConflicts(storeId, date, qty, appState);
     if (conflicts.length) {
-      showToast(`Esta loja já teve lançamento de ${getBoxTypeLabels(conflicts)} nessa data.`, 'error');
+      showToast(`Esta loja já teve lançamento de ${getBoxTypeLabels(conflicts)} nessa data. Para corrigir, use Editar em Saídas recentes.`, 'error');
       refreshStoreOptions();
       return;
     }
@@ -10805,8 +11608,14 @@ function bindEntregasMotoristaEvents() {
 
 function bindRecebimentosEvents() {
   const form = document.getElementById('form-recebimento');
+  if (!form) return;
   const outboundSelect = document.getElementById('recebimento-outbound');
   const summary = document.getElementById('recebimento-resumo');
+  const totalInput = document.getElementById('recebimento-total');
+  const detailPanel = document.getElementById('recebimento-detalhe');
+  const alertText = document.getElementById('recebimento-alerta');
+
+  const getSelectedOutbound = () => appState.movements.outbounds.find((item) => item.id === outboundSelect.value);
 
   const clearReceiptInputs = () => {
     BOX_TYPES.forEach((item) => {
@@ -10816,31 +11625,74 @@ function bindRecebimentosEvents() {
   };
 
   const updateSummary = () => {
-    const outbound = appState.movements.outbounds.find((item) => item.id === outboundSelect.value);
+    const outbound = getSelectedOutbound();
     if (!outbound) {
       summary.innerHTML = 'Selecione a saída.';
+      if (detailPanel) detailPanel.classList.add('hidden');
       clearReceiptInputs();
       return;
     }
 
-    clearReceiptInputs();
     const store = getStoreById(outbound.storeId);
+    const route = getRouteById(outbound.routeId);
+    const total = safeInt(totalInput?.value);
+    const expectedTotal = sumQty(outbound.qty);
+
+    if (total <= 0) {
+      summary.innerHTML = `
+        <strong>${store?.name || '-'}</strong><br>
+        Data: ${formatDateBR(outbound.date)} • Rota: ${route?.name || '-'}<br>
+        Correto esperado: <strong>${expectedTotal} caixas</strong>
+      `;
+      if (detailPanel) detailPanel.classList.add('hidden');
+      return;
+    }
+
+    const hasDiff = total !== expectedTotal;
+    if (detailPanel) detailPanel.classList.toggle('hidden', !hasDiff);
+
+    if (!hasDiff) {
+      summary.innerHTML = `
+        <strong>${store?.name || '-'}</strong>${store?.network ? ` • ${store.network}` : ''}<br>
+        Total informado pelo promotor: <strong>${total} caixas</strong><br>
+        <span class="tag ok">Quantidade correta para esta loja</span>
+      `;
+      return;
+    }
+
+    const diff = total - expectedTotal;
+    const signal = diff > 0 ? '+' : '';
     summary.innerHTML = `
-      <strong>${store?.name || '-'}</strong><br>
-      Data: ${formatDateBR(outbound.date)} • Rota: ${getRouteById(outbound.routeId)?.name || '-'}
+      <strong>${store?.name || '-'}</strong>${store?.network ? ` • ${store.network}` : ''}<br>
+      Total informado pelo promotor: <strong>${total} caixas</strong><br>
+      <span class="tag danger">Divergência de ${signal}${diff} caixa(s)</span>
     `;
+    if (alertText) alertText.textContent = `Promotor informou ${total} caixas. Correto esperado: ${expectedTotal}. Diferença: ${signal}${diff}. Informe folhagens e bandejas. Correto para a loja: ${outbound.qty.folhagens} folhagens e ${outbound.qty.bandejas} bandejas.`;
   };
 
-  outboundSelect.addEventListener('change', updateSummary);
+  outboundSelect.addEventListener('change', () => {
+    if (totalInput) totalInput.value = '';
+    clearReceiptInputs();
+    updateSummary();
+  });
+  totalInput?.addEventListener('input', updateSummary);
   updateSummary();
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const qty = readQtyFromForm(form, 'recebimento');
+    const outbound = getSelectedOutbound();
+    if (!outbound) {
+      showToast('Selecione a saída para confirmar.', 'error');
+      return;
+    }
+    const totalReceived = safeInt(form.totalReceived.value);
+    const expectedTotal = sumQty(outbound.qty);
+    const hasDiff = totalReceived !== expectedTotal;
     const payload = {
       outboundId: form.outboundId.value,
       date: todayStr(),
-      qty,
+      totalReceived,
+      qty: hasDiff ? readQtyFromForm(form, 'recebimento') : outbound.qty,
       justification: form.justification.value.trim(),
     };
     const result = await persistMutation('CONFIRM_RECEIPT', payload, 'Recebimento confirmado com sucesso.');
@@ -11299,16 +12151,33 @@ function bindUsuariosEvents() {
     });
   }
 
+  const reliefAdminForm = document.getElementById('form-folguista-rota-adm');
+  if (reliefAdminForm) {
+    reliefAdminForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const payload = {
+        userId: reliefAdminForm.userId.value,
+        date: reliefAdminForm.date.value || todayStr(),
+        routeId: reliefAdminForm.routeId.value,
+        reason: reliefAdminForm.reason.value.trim(),
+      };
+      const result = await persistMutation('SET_RELIEF_DRIVER_ROUTE', payload, 'Rota do folguista definida pelo ADM.');
+      if (result.ok) render();
+    });
+  }
+
   const refreshUserTargetRow = (userId) => {
     const role = document.querySelector(`.user-role-select[data-user-id="${userId}"]`)?.value;
+    const rowUser = getUserById(userId);
+    const reliefDriver = role === 'driver' && isReliefDriver(rowUser);
     const storeSelect = document.querySelector(`.user-store-select[data-user-id="${userId}"]`);
     const routeSelect = document.querySelector(`.user-route-select[data-user-id="${userId}"]`);
     const staticTarget = document.querySelector(`.user-target-static[data-user-id="${userId}"]`);
     storeSelect?.classList.toggle('hidden', role !== 'promoter');
-    routeSelect?.classList.toggle('hidden', role !== 'driver');
-    staticTarget?.classList.toggle('hidden', role === 'promoter' || role === 'driver');
+    routeSelect?.classList.toggle('hidden', role !== 'driver' || reliefDriver);
+    staticTarget?.classList.toggle('hidden', role === 'promoter' || (role === 'driver' && !reliefDriver));
     if (staticTarget) {
-      staticTarget.textContent = role === 'admin' ? 'ADM geral' : role === 'cd' ? 'CD' : role === 'viewer' ? 'Gestão / Visualização' : '-';
+      staticTarget.textContent = reliefDriver ? getUserAccessTarget(rowUser) : role === 'admin' ? 'ADM geral' : role === 'cd' ? 'CD' : role === 'viewer' ? 'Gestão / Visualização' : '-';
     }
   };
 
