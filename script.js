@@ -5930,6 +5930,9 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (!['admin', 'driver'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou motorista pode validar entrega.' };
     const outbound = state.movements.outbounds.find((item) => item.id === payload.outboundId);
     if (!outbound) return { ok: false, error: 'Saída não encontrada.' };
+    if (actor.role === 'driver' && outbound.date !== todayStr()) {
+      return { ok: false, error: 'Motorista só pode validar entregas lançadas para a data de hoje. Entregas anteriores ficam como pendência para o ADM.' };
+    }
     if (outbound.driverDeliveryId || state.movements.driverDeliveries.some((item) => isActiveMovement(item) && item.outboundId === outbound.id)) return { ok: false, error: 'O motorista já validou esta entrega. Para corrigir, use o botão Editar entrega.' };
     const store = getStoreById(outbound.storeId, state);
     if (!store) return { ok: false, error: 'Loja não encontrada.' };
@@ -8358,10 +8361,41 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
   return pendencies;
 }
 
+
+function getOverdueDriverDeliveryPendenciesForAdmin(state = appState, today = todayStr()) {
+  return (state.movements.outbounds || [])
+    .filter((outbound) => {
+      if (!isActiveMovement(outbound) || outbound.status === 'historico') return false;
+      if (!outbound.date || outbound.date >= today) return false;
+      if (outbound.driverDeliveryId) return false;
+      if ((state.movements.driverDeliveries || []).some((delivery) => isActiveMovement(delivery) && delivery.outboundId === outbound.id)) return false;
+      const store = getStoreById(outbound.storeId, state);
+      return storeRequiresDriver(store);
+    })
+    .map((outbound) => {
+      const store = getStoreById(outbound.storeId, state);
+      const driverId = getOutboundResponsibleDriver(outbound, state);
+      return {
+        area: 'Entrega vencida do motorista',
+        responsibleRole: 'admin',
+        responsibleUserId: null,
+        responsibleName: 'ADM',
+        storeId: outbound.storeId,
+        routeId: outbound.routeId,
+        date: outbound.date,
+        description: `${store?.name || '-'} tinha entrega em ${formatDateBR(outbound.date)} e não foi confirmada pelo motorista. A pendência saiu da tela do motorista e deve ser tratada pelo ADM. Motorista/rota: ${getUserById(driverId, state)?.name || getRouteById(outbound.routeId, state)?.name || '-'}. Total lançado: ${sumQty(outbound.qty)} caixas.`,
+        priority: 'danger',
+      };
+    });
+}
+
 function getVisiblePendenciesForCurrentUser(date = todayStr()) {
   const items = getOperationalPendencies(date, appState);
   if (!currentUser) return [];
-  if (currentUser.role === 'admin' || currentUser.role === 'viewer') return items;
+  if (currentUser.role === 'admin' || currentUser.role === 'viewer') {
+    const isToday = !date || date === todayStr();
+    return isToday ? [...items, ...getOverdueDriverDeliveryPendenciesForAdmin(appState, todayStr())] : items;
+  }
   if (currentUser.role === 'cd') {
     return items.filter((item) => item.responsibleRole === 'cd' || item.area === 'Retorno no CD' || item.area === 'Aprovação ADM');
   }
@@ -8939,15 +8973,21 @@ function renderSaidas() {
   `;
 }
 function renderEntregasMotorista() {
-  const driverRouteIds = currentUser.role === 'driver' ? getDriverRouteIds(currentUser, appState, todayStr()) : [];
+  const today = todayStr();
+  const driverRouteIds = currentUser.role === 'driver' ? getDriverRouteIds(currentUser, appState, today) : [];
   const pending = appState.movements.outbounds.filter((item) => {
     if (!isActiveMovement(item) || item.status === 'historico' || item.driverDeliveryId || (appState.movements.driverDeliveries || []).some((delivery) => isActiveMovement(delivery) && delivery.outboundId === item.id)) return false;
     if (currentUser.role === 'driver') {
+      if (item.date !== today) return false;
       return item.driverId === currentUser.id || driverRouteIds.includes(item.routeId) || getOutboundResponsibleDriver(item) === currentUser.id;
     }
     return true;
   }).slice(0, 80);
-  const recent = (appState.movements.driverDeliveries || []).filter((item) => isActiveMovement(item) && isMovementVisibleToUser(item, currentUser, appState)).slice(0, 12);
+  const recent = (appState.movements.driverDeliveries || []).filter((item) => {
+    if (!isActiveMovement(item) || !isMovementVisibleToUser(item, currentUser, appState)) return false;
+    if (currentUser.role === 'driver') return item.date === today;
+    return true;
+  }).slice(0, 12);
   return `
     <div class="grid-2">
       <div class="card">
