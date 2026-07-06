@@ -4100,8 +4100,8 @@ const NAV_ITEMS = [
 
 const MOBILE_PRIORITY_BY_ROLE = {
   admin: ['dashboard', 'pendencias', 'fechamento', 'divergencias'],
-  cd: ['dashboard', 'saidas', 'retornos', 'pendencias'],
-  driver: ['dashboard', 'entregasMotorista', 'recolhimentos', 'pendencias'],
+  cd: ['dashboard', 'saidas', 'resumoEnvios', 'retornos'],
+  driver: ['dashboard', 'entregasMotorista', 'recolhimentos', 'caixasOcupadas'],
   promoter: ['dashboard', 'recebimentos', 'caixasLiberadas', 'pendencias'],
   viewer: ['dashboard', 'estoque', 'divergencias'],
 };
@@ -4137,7 +4137,7 @@ let currentUser = null;
 let passwordChangeUser = null;
 let currentView = 'dashboard';
 let backendMode = 'local';
-const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '' };
+const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '' };
 let firebaseDb = null;
 let firebaseRootRef = null;
 let unsubscribeFirebase = null;
@@ -4208,8 +4208,15 @@ function showToast(message, type = 'ok') {
   showToast.timer = setTimeout(() => els.toast.classList.remove('show'), 3000);
 }
 
-function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+function todayStr(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day}`;
 }
 
 function nowIso() {
@@ -5093,6 +5100,113 @@ function getStoreValidationTagClass(store) {
 
 function isGoianiaRoute(routeId) {
   return GOIANIA_ROUTE_IDS.includes(routeId);
+}
+
+const PENDENCY_OWNER_RULES = {
+  cd: {
+    key: 'cd',
+    name: 'Matheus Reis',
+    area: 'Produção',
+    userId: 'user_admin_matheus_reis',
+    username: 'matheusreis',
+    reason: 'Saída do CD ou lançamento incorreto.',
+  },
+  driverDelivery: {
+    key: 'driverDelivery',
+    name: 'Roberto Cesar',
+    area: 'Logística',
+    userId: 'user_admin_roberto_cesar',
+    username: 'robertocesar',
+    reason: 'Motorista não validou entrega ou lançou na data errada.',
+  },
+  promoterReceipt: {
+    key: 'promoterReceipt',
+    name: 'Mércia Alves',
+    area: 'Promotores',
+    userId: 'user_wxv7tlng',
+    username: 'merciaalves',
+    reason: 'Promotor não confirmou o recebimento das caixas na loja.',
+  },
+  goiania: {
+    key: 'goiania',
+    name: 'Paulo César',
+    area: 'Goiânia',
+    userId: 'user_i2h4fbit',
+    username: 'paulocesar',
+    reason: 'Pendência vinculada à operação de Goiânia.',
+  },
+  admin: {
+    key: 'admin',
+    name: 'ADM',
+    area: 'Gestão',
+    userId: null,
+    username: '',
+    reason: 'Pendência administrativa.',
+  },
+};
+
+function findOwnerUser(owner, state = appState) {
+  if (!owner) return null;
+  const normalizedName = normalizeText(owner.name);
+  const normalizedUsername = normalizeText(owner.username);
+  return (state.users || []).find((user) =>
+    (owner.userId && user.id === owner.userId)
+    || (normalizedUsername && normalizeText(user.username) === normalizedUsername)
+    || (normalizedName && normalizeText(user.name) === normalizedName)
+  ) || null;
+}
+
+function isGoianiaContext(context = {}, state = appState) {
+  if (context.routeId && (isGoianiaRoute(context.routeId) || context.routeId === SUPPORT_POINT_ROUTE_ID)) return true;
+  if (context.storeId === SUPPORT_POINT_STORE_ID) return true;
+  const store = context.storeId ? getStoreById(context.storeId, state) : null;
+  return !!store && (
+    store.defaultRouteId === SUPPORT_POINT_ROUTE_ID
+    || store.sundayRouteId === SUPPORT_POINT_ROUTE_ID
+    || isGoianiaRoute(store.defaultRouteId)
+    || isGoianiaRoute(store.sundayRouteId)
+  );
+}
+
+function getPendencyOwner(kind, context = {}, state = appState) {
+  const owner = isGoianiaContext(context, state)
+    ? PENDENCY_OWNER_RULES.goiania
+    : (PENDENCY_OWNER_RULES[kind] || PENDENCY_OWNER_RULES.admin);
+  const user = findOwnerUser(owner, state);
+  return {
+    ownerKey: owner.key,
+    ownerName: owner.name,
+    ownerArea: owner.area,
+    ownerUserId: user?.id || owner.userId || null,
+    ownerReason: owner.reason,
+  };
+}
+
+function withPendencyOwner(item, kind, context = {}, state = appState) {
+  return {
+    ...item,
+    ...getPendencyOwner(kind, context || item, state),
+  };
+}
+
+function getDivergenceOwnerKind(div) {
+  if (!div) return 'admin';
+  if (div.type === 'recebimento_loja') return 'promoterReceipt';
+  if (div.type === 'entrega_motorista_loja' || div.type === 'retorno_cd' || div.type === 'frete_goiania_retorno_vinicius') return 'driverDelivery';
+  if (div.type === 'carga_goiania') return 'goiania';
+  if (div.type === 'inventario_cd') return 'cd';
+  if (div.type === 'inventario_loja') return 'promoterReceipt';
+  return 'admin';
+}
+
+function getDivergenceOwnerInfo(div, state = appState) {
+  return getPendencyOwner(getDivergenceOwnerKind(div), div, state);
+}
+
+function getDivergenceOwnerOptions() {
+  return ['cd', 'driverDelivery', 'promoterReceipt', 'goiania', 'admin']
+    .map((key) => PENDENCY_OWNER_RULES[key])
+    .filter(Boolean);
 }
 
 function isGoianiaTrunkUser(user, date = todayStr(), state = appState) {
@@ -6749,6 +6863,57 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     audit('Divergências', 'Divergência aprovada pelo ADM', `Divergência ${item.id} aprovada como ${item.resolutionType}.`);
   }
 
+
+  if (type === 'BULK_UPDATE_DIVERGENCES') {
+    if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode regularizar divergências em lote.' };
+    const ids = Array.isArray(payload.ids) ? payload.ids.filter(Boolean) : [];
+    if (!ids.length) return { ok: false, error: 'Selecione pelo menos uma divergência.' };
+    const reason = String(payload.reason || '').trim();
+    if (reason.length < 8) return { ok: false, error: 'Informe um motivo/justificativa com mais detalhes.' };
+    const action = String(payload.action || 'regularizacao_administrativa');
+    const selected = state.divergences.filter((div) => ids.includes(div.id) && div.status === 'aberta');
+    if (!selected.length) return { ok: false, error: 'Nenhuma divergência aberta encontrada para regularizar.' };
+
+    selected.forEach((item) => {
+      item.bulkUpdatedAt = nowIso();
+      item.bulkUpdatedBy = actor.name;
+      item.bulkAction = action;
+
+      if (action === 'justificar') {
+        item.responsibleExplanation = reason;
+        item.responsibleExplanationAt = nowIso();
+        item.responsibleExplanationBy = actor.name;
+        item.responsibleExplanationUserId = actor.id;
+        item.explanationStatus = 'informada_em_lote';
+        return;
+      }
+
+      if (action === 'encaminhar_responsavel') {
+        const owner = getDivergenceOwnerInfo(item, state);
+        item.forwardedToOwnerKey = owner.ownerKey;
+        item.forwardedToOwnerName = owner.ownerName;
+        item.forwardedToOwnerArea = owner.ownerArea;
+        item.forwardedToOwnerUserId = owner.ownerUserId;
+        item.forwardedReason = reason;
+        item.forwardedAt = nowIso();
+        item.forwardedBy = actor.name;
+        return;
+      }
+
+      item.status = 'resolvida';
+      item.resolvedAt = nowIso();
+      item.resolvedBy = actor.name;
+      item.approvedBy = actor.name;
+      item.approvedAt = nowIso();
+      item.resolutionType = action || 'regularizacao_administrativa';
+      item.resolution = reason;
+      item.resolvedInBulk = true;
+    });
+
+    const actionLabel = action === 'justificar' ? 'justificadas' : action === 'encaminhar_responsavel' ? 'encaminhadas' : 'regularizadas';
+    audit('Divergências', 'Ação em lote', `${selected.length} divergência(s) ${actionLabel} por ${actor.name}. Motivo: ${reason}`);
+  }
+
   if (type === 'UPDATE_STORE_ROUTE') {
     if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode alterar rota fixa.' };
     const route = getRouteById(payload.routeId, state);
@@ -7380,216 +7545,8 @@ function renderCurrentView() {
 }
 
 function renderMobileQuickNav() {
-  if (!els.mobileQuickNav || !currentUser) return;
-  if (typeof needsReliefDriverRouteSelection === 'function' && needsReliefDriverRouteSelection(currentUser)) {
-    els.mobileQuickNav.innerHTML = '';
-    return;
-  }
-  const counts = getDynamicCounts();
-  const priority = MOBILE_PRIORITY_BY_ROLE[currentUser.role] || ['dashboard', 'pendencias'];
-  const items = priority
-    .filter((viewKey) => canAccessView(viewKey, currentUser))
-    .map((viewKey) => NAV_ITEMS.find((item) => item.key === viewKey))
-    .filter(Boolean);
-
-  els.mobileQuickNav.innerHTML = items.map((item) => `
-    <button type="button" class="mobile-nav-btn ${currentView === item.key ? 'active' : ''}" data-go-view="${item.key}">
-      <span class="mobile-nav-icon">${MOBILE_ICON_BY_VIEW[item.key] || '•'}</span>
-      <span>${getShortViewLabel(item.key)}</span>
-      ${counts[item.key] ? `<small>${counts[item.key]}</small>` : ''}
-    </button>
-  `).join('');
-}
-
-function getShortViewLabel(viewKey) {
-  const labels = {
-    dashboard: 'Início',
-    saidas: 'Saídas',
-    resumoEnvios: 'Envios',
-    entregasMotorista: 'Entregar',
-    recebimentos: 'Receber',
-    recolhimentos: 'Recolher',
-    caixasOcupadas: 'Ocupadas',
-    caixasLiberadas: 'Liberadas',
-    retornos: 'Retorno',
-    estoque: 'Estoque',
-    inventario: 'Inventário',
-    divergencias: 'Diverg.',
-    alertas: 'Alertas',
-    fechamento: 'Fechar',
-    pendencias: 'Pendências',
-    cargaGoiania: 'Carga GO',
-    distribuicaoGoiania: 'GO',
-    relatorios: 'Relatórios',
-  };
-  return labels[viewKey] || (VIEW_META[viewKey]?.title || viewKey);
-}
-
-function goToView(viewKey) {
-  if (!canAccessView(viewKey, currentUser)) return;
-  currentView = viewKey;
-  render();
-  els.sidebar?.classList.remove('open');
-}
-
-function getActionCountForView(viewKey) {
-  const date = todayStr();
-  if (!appState) return 0;
-  if (viewKey === 'pendencias') return getVisiblePendenciesForCurrentUser(date).length;
-  if (viewKey === 'divergencias') return getVisibleDivergences(appState, currentUser).filter((item) => item.status === 'aberta').length;
-  if (viewKey === 'entregasMotorista') {
-    const driverRouteIds = currentUser.role === 'driver' ? getDriverRouteIds(currentUser, appState, date) : [];
-    return appState.movements.outbounds.filter((item) => {
-      if (!isActiveMovement(item) || item.status === 'historico' || item.driverDeliveryId || (appState.movements.driverDeliveries || []).some((delivery) => isActiveMovement(delivery) && delivery.outboundId === item.id)) return false;
-      if (currentUser.role === 'driver') {
-        return item.date === date && (item.driverId === currentUser.id || driverRouteIds.includes(item.routeId) || getOutboundResponsibleDriver(item) === currentUser.id);
-      }
-      return item.date === date;
-    }).length;
-  }
-  if (viewKey === 'recebimentos') {
-    const storeFilter = currentUser.role === 'promoter' ? currentUser.storeId : '';
-    return appState.movements.outbounds.filter((item) => {
-      const store = getStoreById(item.storeId);
-      return isActiveMovement(item) && item.date === date && !item.receiptId && !(appState.movements.receipts || []).some((receipt) => isActiveMovement(receipt) && receipt.outboundId === item.id) && item.status !== 'historico' && storeRequiresPromoter(store) && (!storeFilter || item.storeId === storeFilter);
-    }).length;
-  }
-  if (viewKey === 'retornos') {
-    return appState.movements.pickups.filter((item) => item.date === date && isActiveMovement(item) && !item.returnId && isMovementVisibleToUser(item, currentUser, appState)).length;
-  }
-  if (viewKey === 'saidas') {
-    return getActiveStores().filter((store) => storeHasPendingOutboundForUser(store.id, date, currentUser, appState)).length;
-  }
-  return 0;
-}
-
-function getDailyActionCards() {
-  const role = currentUser?.role;
-  const base = {
-    admin: [
-      { view: 'pendencias', title: 'Ver pendências', desc: 'Cobrar o que ainda falta concluir hoje.', icon: '📌' },
-      { view: 'fechamento', title: 'Fechamento do dia', desc: 'Conferir pendências e encerrar a operação.', icon: '✅' },
-      { view: 'divergencias', title: 'Divergências abertas', desc: 'Analisar diferenças e responsabilidades.', icon: '⚠️' },
-      { view: 'relatorios', title: 'Relatórios', desc: 'Acompanhar saldo por loja, rota e rede.', icon: '📈' },
-    ],
-    cd: [
-      { view: 'saidas', title: 'Registrar saídas', desc: 'Lançar caixas que saíram do CD.', icon: '📦' },
-      { view: 'retornos', title: 'Confirmar retornos', desc: 'Conferir caixas vazias devolvidas ao CD.', icon: '🏭' },
-      { view: 'resumoEnvios', title: 'Resumo de envios', desc: 'Ver lojas já lançadas e pendentes.', icon: '📋' },
-      { view: 'pendencias', title: 'Pendências do CD', desc: 'Resolver o que impede o fechamento.', icon: '📌' },
-    ],
-    driver: [
-      { view: 'entregasMotorista', title: 'Confirmar entrega', desc: 'Informar total deixado na loja.', icon: '🚚' },
-      { view: 'recolhimentos', title: 'Registrar recolhimento', desc: 'Lançar caixas vazias recolhidas.', icon: '↩️' },
-      { view: 'caixasOcupadas', title: 'Caixas ocupadas', desc: 'Informar caixas que ficaram na loja.', icon: '🚧' },
-      { view: 'pendencias', title: 'Minhas pendências', desc: 'Ver o que ainda falta na rota.', icon: '📌' },
-    ],
-    promoter: [
-      { view: 'recebimentos', title: 'Confirmar recebimento', desc: 'Conferir folhagens e bandejas recebidas.', icon: '✅' },
-      { view: 'caixasLiberadas', title: 'Caixas liberadas', desc: 'Informar caixas vazias disponíveis.', icon: '📦' },
-      { view: 'inventario', title: 'Inventário', desc: 'Corrigir saldo físico quando solicitado.', icon: '🧾' },
-      { view: 'pendencias', title: 'Pendências da loja', desc: 'Ver tarefas em aberto.', icon: '📌' },
-    ],
-    viewer: [
-      { view: 'estoque', title: 'Estoque em loja', desc: 'Ver saldos acumulados por loja.', icon: '📊' },
-      { view: 'divergencias', title: 'Divergências', desc: 'Acompanhar pontos de atenção.', icon: '⚠️' },
-      { view: 'dashboard', title: 'Visão geral', desc: 'Resumo da operação em tempo real.', icon: '🏠' },
-    ],
-  };
-  return (base[role] || base.viewer)
-    .filter((item) => canAccessView(item.view, currentUser))
-    .map((item) => ({ ...item, count: getActionCountForView(item.view) }));
-}
-
-function renderDailyActionCenter() {
-  const actions = getDailyActionCards();
-  const pendencies = getVisiblePendenciesForCurrentUser(todayStr()).slice(0, 3);
-  return `
-    <div class="card action-center-card">
-      <div class="section-header action-center-head">
-        <div>
-          <h3>O que fazer agora</h3>
-          <p>Ações rápidas para o seu perfil hoje, sem precisar procurar no menu.</p>
-        </div>
-        <div class="helper-card small">${ROLE_LABELS[currentUser.role] || 'Usuário'} • ${formatDateBR(todayStr())}</div>
-      </div>
-      <div class="quick-actions-grid">
-        ${actions.map((action) => `
-          <button type="button" class="quick-action-card ${action.count ? 'has-count' : ''}" data-go-view="${action.view}">
-            <span class="quick-action-icon">${action.icon}</span>
-            <span class="quick-action-text">
-              <strong>${action.title}</strong>
-              <small>${action.desc}</small>
-            </span>
-            ${action.count ? `<span class="quick-action-count">${action.count}</span>` : ''}
-          </button>
-        `).join('')}
-      </div>
-      ${pendencies.length ? `
-        <div class="today-pendency-strip">
-          <div>
-            <strong>${pendencies.length} pendência(s) em destaque</strong>
-            <p class="muted">${pendencies.map((item) => escapeHtml(item.area)).join(' • ')}</p>
-          </div>
-          <button type="button" class="btn btn-secondary" data-go-view="pendencias">Ver pendências</button>
-        </div>
-      ` : `
-        <div class="today-pendency-strip ok">
-          <div>
-            <strong>Nenhuma pendência visível para seu acesso agora</strong>
-            <p class="muted">Continue registrando as movimentações do dia normalmente.</p>
-          </div>
-        </div>
-      `}
-    </div>
-  `;
-}
-
-function getPendencyTargetView(item) {
-  const area = normalizeText(item?.area || '');
-  if (area.includes('recebimento') && canAccessView('recebimentos', currentUser)) return 'recebimentos';
-  if ((area.includes('entrega') || area.includes('motorista')) && canAccessView('entregasMotorista', currentUser)) return 'entregasMotorista';
-  if (area.includes('recolhimento') && canAccessView('recolhimentos', currentUser)) return 'recolhimentos';
-  if (area.includes('retorno') && canAccessView('retornos', currentUser)) return 'retornos';
-  if (area.includes('saida') && canAccessView('saidas', currentUser)) return 'saidas';
-  if (area.includes('inventario') && canAccessView('inventario', currentUser)) return 'inventario';
-  if (area.includes('diverg') && canAccessView('divergencias', currentUser)) return 'divergencias';
-  if (canAccessView('pendencias', currentUser)) return 'pendencias';
-  return getFirstAllowedView(currentUser);
-}
-
-function renderPendencyActionButton(item) {
-  const target = getPendencyTargetView(item);
-  if (!target || target === currentView) return '';
-  return `<div class="form-actions"><button type="button" class="btn btn-secondary" data-go-view="${target}">Resolver em ${VIEW_META[target]?.title || getShortViewLabel(target)}</button></div>`;
-}
-
-function renderGoianiaFlowGuide(activeStep = 'carga') {
-  const steps = [
-    { key: 'carga', title: '1. Carga principal', desc: 'Vinicius/Sebastião validam tudo que saiu para Goiânia.' },
-    { key: 'distribuicao', title: '2. Repasse aos freteiros', desc: 'Maycon, Alexsandro, Edmar ou reforço recebem apenas suas lojas.' },
-    { key: 'entregas', title: '3. Entregas nas lojas', desc: 'Cada motorista confirma o total deixado em sua rota.' },
-    { key: 'devolucao', title: '4. Devolução ao caminhão principal', desc: 'Freteiros devolvem vazias ao Vinicius/Sebastião.' },
-    { key: 'retorno', title: '5. Retorno ao CD', desc: 'CD confirma o total que voltou para a empresa.' },
-  ];
-  return `
-    <div class="card goiania-flow-card">
-      <div class="section-header">
-        <div>
-          <h3>Fluxo rápido de Goiânia</h3>
-          <p>Cadeia de responsabilidade para não misturar carga principal, freteiros e retorno.</p>
-        </div>
-      </div>
-      <div class="flow-steps">
-        ${steps.map((step) => `
-          <div class="flow-step ${step.key === activeStep ? 'active' : ''}">
-            <strong>${step.title}</strong>
-            <small>${step.desc}</small>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
+  // Barra inferior mobile removida a pedido: navegação apenas pelo botão de menu (☰).
+  if (els.mobileQuickNav) els.mobileQuickNav.innerHTML = '';
 }
 
 function enhanceMobileTables() {
@@ -8477,61 +8434,66 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
     const driverId = getOutboundResponsibleDriver(outbound, state);
     const driverDelivery = (state.movements.driverDeliveries || []).find((item) => isActiveMovement(item) && item.outboundId === outbound.id);
     const receipt = state.movements.receipts.find((item) => isActiveMovement(item) && item.outboundId === outbound.id);
+    const context = { storeId: outbound.storeId, routeId: outbound.routeId };
 
     if (isGoianiaRoute(outbound.routeId) && !transfer && !driverDelivery) {
-      pendencies.push({
+      pendencies.push(withPendencyOwner({
         area: 'Distribuição Goiânia',
         responsibleRole: 'driver',
         responsibleUserId: 'user_motor_vinicius',
         responsibleName: 'Vinicius/Sebastião',
         storeId: outbound.storeId,
         routeId: outbound.routeId,
+        date: outbound.date,
         description: `${store?.name || '-'} ainda não foi repassada para Vinicius/Maycon/Alexsandro/Edmar/reforço.`,
         priority: 'warning',
-      });
+      }, 'goiania', context, state));
       return;
     }
 
     if (storeRequiresDriver(store) && !driverDelivery) {
-      pendencies.push({
+      pendencies.push(withPendencyOwner({
         area: 'Entrega do Motorista',
         responsibleRole: 'driver',
         responsibleUserId: driverId,
         responsibleName: getUserById(driverId, state)?.name || 'Motorista',
         storeId: outbound.storeId,
         routeId: outbound.routeId,
+        date: outbound.date,
         description: `${store?.name || '-'} ainda não teve total deixado confirmado pelo motorista.`,
         priority: 'warning',
-      });
+      }, 'driverDelivery', context, state));
     }
 
     if (storeRequiresPromoter(store) && !receipt) {
-      pendencies.push({
+      pendencies.push(withPendencyOwner({
         area: 'Recebimento na Loja',
         responsibleRole: 'promoter',
         responsibleUserId: store?.promoterId || null,
         responsibleName: getUserById(store?.promoterId, state)?.name || 'Promotor da loja',
         storeId: outbound.storeId,
         routeId: outbound.routeId,
+        date: outbound.date,
         description: `${store?.name || '-'} ainda não confirmou folhagens e bandejas recebidas.`,
         priority: 'warning',
-      });
+      }, 'promoterReceipt', context, state));
     }
   });
 
   state.movements.pickups
     .filter((item) => isActiveMovement(item) && item.date === date && !item.returnBatchId)
     .forEach((pickup) => {
-      pendencies.push({
+      pendencies.push(withPendencyOwner({
         area: 'Retorno no CD',
         responsibleRole: 'cd',
         responsibleUserId: null,
         responsibleName: 'CD',
         storeId: pickup.storeId,
         routeId: pickup.routeId,
+        date: pickup.date,
         description: `${getRouteById(pickup.routeId, state)?.name || '-'} / ${getUserById(pickup.driverId, state)?.name || '-'} tem recolhimento pendente de conferência no CD.`,
         priority: 'info',
-      });
+      }, 'cd', pickup, state));
     });
 
   (state.mandatoryInventories || [])
@@ -8540,16 +8502,18 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
       getMandatoryInventoryStoreIds(schedule, state).forEach((storeId) => {
         if (!isMandatoryInventoryPendingForStore(schedule, storeId, state)) return;
         const store = getStoreById(storeId, state);
-        pendencies.push({
+        const routeId = getEffectiveRoute(storeId, date, state);
+        pendencies.push(withPendencyOwner({
           area: 'Inventário obrigatório',
           responsibleRole: 'promoter',
           responsibleUserId: store?.promoterId || null,
           responsibleName: storeRequiresPromoter(store) ? (getUserById(store?.promoterId, state)?.name || 'Promotor da loja') : 'ADM / loja sem promotor',
           storeId,
-          routeId: getEffectiveRoute(storeId, date, state),
+          routeId,
+          date,
           description: `${store?.name || '-'} precisa realizar inventário obrigatório em ${formatDateBR(date)}.`,
           priority: 'danger',
-        });
+        }, storeRequiresPromoter(store) ? 'promoterReceipt' : 'admin', { storeId, routeId }, state));
       });
     });
 
@@ -8557,13 +8521,20 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
     .filter((div) => div.status === 'aberta' && (!date || div.date === date))
     .forEach((div) => {
       const waitingExplanation = needsResponsibleExplanation(div);
+      const owner = getDivergenceOwnerInfo(div, state);
       pendencies.push({
         area: waitingExplanation ? 'Justificar divergência' : 'Aprovação ADM',
         responsibleRole: waitingExplanation ? (div.responsibleRole || 'driver') : 'admin',
         responsibleUserId: waitingExplanation ? (div.responsibleUserId || div.driverId) : null,
         responsibleName: waitingExplanation ? (getDivergenceResponsible(div)?.name || 'Responsável') : 'ADM',
+        ownerKey: owner.ownerKey,
+        ownerName: owner.ownerName,
+        ownerArea: owner.ownerArea,
+        ownerUserId: owner.ownerUserId,
+        ownerReason: owner.ownerReason,
         storeId: div.storeId,
         routeId: div.routeId,
+        date: div.date,
         description: `${getDivergenceTitle(div)}: ${getDivergenceRealErrorText(div)}`,
         priority: 'danger',
       });
@@ -8571,7 +8542,6 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
 
   return pendencies;
 }
-
 
 function getOverdueDriverDeliveryPendenciesForAdmin(state = appState, today = todayStr()) {
   return (state.movements.outbounds || [])
@@ -8586,7 +8556,7 @@ function getOverdueDriverDeliveryPendenciesForAdmin(state = appState, today = to
     .map((outbound) => {
       const store = getStoreById(outbound.storeId, state);
       const driverId = getOutboundResponsibleDriver(outbound, state);
-      return {
+      return withPendencyOwner({
         area: 'Entrega vencida do motorista',
         responsibleRole: 'admin',
         responsibleUserId: null,
@@ -8594,9 +8564,9 @@ function getOverdueDriverDeliveryPendenciesForAdmin(state = appState, today = to
         storeId: outbound.storeId,
         routeId: outbound.routeId,
         date: outbound.date,
-        description: `${store?.name || '-'} tinha entrega em ${formatDateBR(outbound.date)} e não foi confirmada pelo motorista. A pendência saiu da tela do motorista e deve ser tratada pelo ADM. Motorista/rota: ${getUserById(driverId, state)?.name || getRouteById(outbound.routeId, state)?.name || '-'}. Total lançado: ${sumQty(outbound.qty)} caixas.`,
+        description: `${store?.name || '-'} tinha entrega em ${formatDateBR(outbound.date)} e não foi confirmada pelo motorista. A pendência saiu da tela do motorista e deve ser tratada pelo responsável. Motorista/rota: ${getUserById(driverId, state)?.name || getRouteById(outbound.routeId, state)?.name || '-'}. Total lançado: ${sumQty(outbound.qty)} caixas.`,
         priority: 'danger',
-      };
+      }, 'driverDelivery', outbound, state);
     });
 }
 
@@ -8767,7 +8737,6 @@ function renderDashboard() {
   return `
     <div class="stack">
       ${renderMandatoryInventoryNotice(todayStr())}
-      ${renderDailyActionCenter()}
       ${showCdForecast ? (metrics.company < forecast.predicted ? `
         <div class="alert-strip critical">
           <div>
@@ -9105,7 +9074,7 @@ function renderSaidas() {
 
         <form id="form-saida" class="stack">
           <div class="form-grid-3">
-            <label>Data
+            <label>Data da entrega
               <input type="date" name="date" value="${date}" required />
             </label>
             <label>Rede
@@ -9189,8 +9158,8 @@ function renderEntregasMotorista() {
   const driverRouteIds = currentUser.role === 'driver' ? getDriverRouteIds(currentUser, appState, today) : [];
   const pending = appState.movements.outbounds.filter((item) => {
     if (!isActiveMovement(item) || item.status === 'historico' || item.driverDeliveryId || (appState.movements.driverDeliveries || []).some((delivery) => isActiveMovement(delivery) && delivery.outboundId === item.id)) return false;
+    if (item.date !== today) return false;
     if (currentUser.role === 'driver') {
-      if (item.date !== today) return false;
       return item.driverId === currentUser.id || driverRouteIds.includes(item.routeId) || getOutboundResponsibleDriver(item) === currentUser.id;
     }
     return true;
@@ -10176,63 +10145,164 @@ function renderInventario() {
 
 function renderDivergencias() {
   const visibleDivergences = getVisibleDivergences(appState, currentUser);
-  const open = visibleDivergences.filter((item) => item.status === 'aberta');
-  const resolved = visibleDivergences.filter((item) => item.status === 'resolvida');
+  const ownerFilter = viewFilters.divergenciaOwner || '';
+  const typeFilter = viewFilters.divergenciaType || '';
+  const dateFilter = viewFilters.divergenciaDate || '';
+  const searchFilter = normalizeText(viewFilters.divergenciaSearch || '');
+  const ownerOptions = getDivergenceOwnerOptions();
+  const typeOptions = [...new Set(visibleDivergences.map((item) => item.type).filter(Boolean))]
+    .sort((a, b) => getDivergenceTitle({ type: a }).localeCompare(getDivergenceTitle({ type: b }), 'pt-BR'));
+
+  const matchesFilters = (item) => {
+    const owner = getDivergenceOwnerInfo(item);
+    if (ownerFilter && owner.ownerKey !== ownerFilter) return false;
+    if (typeFilter && item.type !== typeFilter) return false;
+    if (dateFilter && item.date !== dateFilter) return false;
+    if (searchFilter) {
+      const store = getStoreById(item.storeId);
+      const route = getRouteById(item.routeId);
+      const driver = getUserById(item.driverId);
+      const haystack = normalizeText(`${getDivergenceTitle(item)} ${describeDivergence(item)} ${store?.name || ''} ${route?.name || ''} ${driver?.name || ''} ${owner.ownerName} ${owner.ownerArea}`);
+      if (!haystack.includes(searchFilter)) return false;
+    }
+    return true;
+  };
+
+  const filtered = visibleDivergences.filter(matchesFilters);
+  const open = filtered.filter((item) => item.status === 'aberta');
+  const resolved = filtered.filter((item) => item.status === 'resolvida');
+  const openTotal = visibleDivergences.filter((item) => item.status === 'aberta').length;
+
   return `
-    <div class="grid-2">
+    <div class="stack">
       <div class="card">
-        <div class="section-header">
+        <div class="page-header">
           <div>
-            <h3>Divergências em aberto</h3>
+            <h3>Central de regularização</h3>
+            <p class="muted">Filtre, selecione e regularize divergências em lote sem apagar o histórico.</p>
           </div>
-          <div class="badge-count">${open.length}</div>
+          <div class="helper-card small">Abertas no sistema: <strong>${openTotal}</strong><br>Exibidas no filtro: <strong>${open.length}</strong></div>
         </div>
-        ${open.length ? `
-          <div class="list">
-            ${open.map((item) => `
-              <div class="list-item">
-                <div class="list-item-head">
-                  <strong>${getDivergenceTitle(item)}</strong>
-                  ${needsResponsibleExplanation(item) ? getDivergenceExplanationStatusTag(item) : statusTag('danger')}
-                </div>
-                <p>${describeDivergence(item)}</p>
-                <small class="muted">${getDivergenceRealErrorText(item)}</small>
-                ${item.requiresResponsibleExplanation ? `<small class="muted">Responsável pela justificativa: <strong>${getDivergenceResponsible(item)?.name || 'Não definido'}</strong></small>` : ''}
-                <div class="muted">Criada em ${formatDateTimeBR(item.createdAt)}</div>
-                <div class="inline-actions">
-                  <button class="btn btn-primary btn-view-divergence" data-id="${item.id}">Ver erro detalhado</button>
-                  ${canCurrentUserExplainDivergence(item) && !item.responsibleExplanation ? `<button class="btn btn-secondary btn-explain-divergence" data-id="${item.id}">Justificar divergência</button>` : ''}
-                  ${currentUser.role === 'admin' ? `<button class="btn btn-secondary btn-resolve-divergence" data-id="${item.id}">Aprovar pelo ADM</button>` : ''}
-                </div>
-              </div>
-            `).join('')}
+        <form id="form-divergence-filter" class="form-grid-3">
+          <label>Responsável
+            <select name="owner">
+              <option value="">Todos os responsáveis</option>
+              ${ownerOptions.map((owner) => `<option value="${owner.key}" ${owner.key === ownerFilter ? 'selected' : ''}>${escapeHtml(owner.name)} — ${escapeHtml(owner.area)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Tipo de erro
+            <select name="type">
+              <option value="">Todos os tipos</option>
+              ${typeOptions.map((type) => `<option value="${escapeHtml(type)}" ${type === typeFilter ? 'selected' : ''}>${escapeHtml(getDivergenceTitle({ type }))}</option>`).join('')}
+            </select>
+          </label>
+          <label>Data
+            <input type="date" name="date" value="${escapeHtml(dateFilter)}" />
+          </label>
+          <label>Buscar loja, rota ou motorista
+            <input type="text" name="search" value="${escapeHtml(viewFilters.divergenciaSearch || '')}" placeholder="Ex.: Stanio, Costa, Goiânia" />
+          </label>
+          <div class="form-actions align-end">
+            <button type="submit" class="btn btn-secondary">Aplicar filtros</button>
+            <button type="button" class="btn btn-ghost" id="btn-clear-divergence-filter">Limpar filtros</button>
           </div>
-        ` : `<div class="empty">Sem divergências em aberto.</div>`}
+        </form>
       </div>
 
-      <div class="card">
-        <div class="section-header">
-          <div>
-            <h3>Histórico resolvido</h3>
+      ${currentUser.role === 'admin' ? `
+        <form id="form-bulk-divergences" class="card stack">
+          <div class="section-header">
+            <div>
+              <h3>Ação em lote</h3>
+              <p class="muted">Use para limpar divergências antigas por grupo, sempre com motivo registrado na auditoria.</p>
+            </div>
+            <label class="checkbox-inline"><input type="checkbox" id="select-all-divergences" /> Selecionar exibidas</label>
           </div>
+          <div class="form-grid-3">
+            <label>Ação
+              <select name="action" required>
+                <option value="regularizacao_administrativa">Resolver como regularização administrativa</option>
+                <option value="baixa_administrativa">Resolver como baixa administrativa</option>
+                <option value="regularizada_inventario">Marcar como regularizada por inventário</option>
+                <option value="duplicada">Marcar como duplicada</option>
+                <option value="erro_data_lancamento">Resolver como erro de data de lançamento</option>
+                <option value="justificar">Apenas justificar selecionadas</option>
+                <option value="encaminhar_responsavel">Encaminhar para responsável</option>
+              </select>
+            </label>
+            <label>Motivo obrigatório
+              <input type="text" name="reason" required placeholder="Ex.: Regularização administrativa de divergências antigas conferidas pela gestão." />
+            </label>
+            <div class="form-actions align-end">
+              <button type="submit" class="btn btn-primary">Aplicar nas selecionadas</button>
+            </div>
+          </div>
+        </form>
+      ` : ''}
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="section-header">
+            <div>
+              <h3>Divergências em aberto</h3>
+            </div>
+            <div class="badge-count">${open.length}</div>
+          </div>
+          ${open.length ? `
+            <div class="list">
+              ${open.map((item) => {
+                const owner = getDivergenceOwnerInfo(item);
+                return `
+                  <div class="list-item divergence-row" data-owner="${escapeHtml(owner.ownerKey)}" data-type="${escapeHtml(item.type || '')}">
+                    <div class="list-item-head">
+                      <div class="checkbox-title">
+                        ${currentUser.role === 'admin' ? `<input type="checkbox" class="bulk-divergence-checkbox" name="divergenceIds" value="${item.id}" form="form-bulk-divergences" />` : ''}
+                        <strong>${getDivergenceTitle(item)}</strong>
+                      </div>
+                      ${needsResponsibleExplanation(item) ? getDivergenceExplanationStatusTag(item) : statusTag('danger')}
+                    </div>
+                    <p>${describeDivergence(item)}</p>
+                    <small class="muted">${getDivergenceRealErrorText(item)}</small>
+                    <small class="muted">Dono da regularização: <strong>${escapeHtml(owner.ownerName)} — ${escapeHtml(owner.ownerArea)}</strong></small>
+                    ${item.requiresResponsibleExplanation ? `<small class="muted">Responsável pela justificativa operacional: <strong>${getDivergenceResponsible(item)?.name || 'Não definido'}</strong></small>` : ''}
+                    <div class="muted">Criada em ${formatDateTimeBR(item.createdAt)}</div>
+                    <div class="inline-actions">
+                      <button class="btn btn-primary btn-view-divergence" data-id="${item.id}" type="button">Ver erro detalhado</button>
+                      ${canCurrentUserExplainDivergence(item) && !item.responsibleExplanation ? `<button class="btn btn-secondary btn-explain-divergence" data-id="${item.id}" type="button">Justificar divergência</button>` : ''}
+                      ${currentUser.role === 'admin' ? `<button class="btn btn-secondary btn-resolve-divergence" data-id="${item.id}" type="button">Aprovar pelo ADM</button>` : ''}
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          ` : `<div class="empty">Sem divergências em aberto para este filtro.</div>`}
         </div>
-        ${resolved.length ? `
-          <div class="list">
-            ${resolved.slice(0, 8).map((item) => `
-              <div class="list-item">
-                <div class="list-item-head">
-                  <strong>${getDivergenceTitle(item)}</strong>
-                  ${statusTag('ok')}
-                </div>
-                <p>${describeDivergence(item)}</p>
-                <small class="muted">Resolvida por ${item.resolvedBy || '-'} em ${formatDateTimeBR(item.resolvedAt)}</small>
-                <div class="inline-actions">
-                  <button class="btn btn-ghost btn-view-divergence" data-id="${item.id}">Ver detalhes</button>
-                </div>
-              </div>
-            `).join('')}
+
+        <div class="card">
+          <div class="section-header">
+            <div>
+              <h3>Histórico resolvido</h3>
+            </div>
           </div>
-        ` : `<div class="empty">Nenhuma divergência resolvida ainda.</div>`}
+          ${resolved.length ? `
+            <div class="list">
+              ${resolved.slice(0, 8).map((item) => `
+                <div class="list-item">
+                  <div class="list-item-head">
+                    <strong>${getDivergenceTitle(item)}</strong>
+                    ${statusTag('ok')}
+                  </div>
+                  <p>${describeDivergence(item)}</p>
+                  <small class="muted">Resolvida por ${item.resolvedBy || '-'} em ${formatDateTimeBR(item.resolvedAt)}</small>
+                  ${item.resolvedInBulk ? `<small class="muted">Regularizada em lote: ${escapeHtml(item.resolution || '-')}</small>` : ''}
+                  <div class="inline-actions">
+                    <button class="btn btn-ghost btn-view-divergence" data-id="${item.id}" type="button">Ver detalhes</button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          ` : `<div class="empty">Nenhuma divergência resolvida neste filtro.</div>`}
+        </div>
       </div>
     </div>
   `;
@@ -10346,47 +10416,38 @@ function renderPendencias() {
   const pendencies = getVisiblePendenciesForCurrentUser(date);
   const byResponsible = {};
   pendencies.forEach((item) => {
-    const key = item.responsibleName || item.responsibleRole || 'Responsável';
-    byResponsible[key] = byResponsible[key] || [];
-    byResponsible[key].push(item);
+    const key = item.ownerName || item.responsibleName || item.responsibleRole || 'Responsável';
+    byResponsible[key] = byResponsible[key] || { ownerArea: item.ownerArea || '', ownerReason: item.ownerReason || '', items: [] };
+    byResponsible[key].items.push(item);
   });
-  const dangerCount = pendencies.filter((item) => item.priority === 'danger').length;
-  const warnCount = pendencies.filter((item) => item.priority !== 'danger').length;
   return `
     <div class="stack">
-      <div class="card pendency-summary-card">
-        <div class="section-header">
-          <div>
-            <h3>Painel rápido de pendências</h3>
-            <p>Use esta tela como checklist do dia antes do fechamento.</p>
-          </div>
-        </div>
-        <div class="stats-inline">
-          <div class="stat-pill"><span>Total visível</span><strong>${pendencies.length}</strong></div>
-          <div class="stat-pill"><span>Críticas</span><strong>${dangerCount}</strong></div>
-          <div class="stat-pill"><span>Atenção</span><strong>${warnCount}</strong></div>
-        </div>
-      </div>
       <div class="card">
         <div class="page-header">
           <div>
             <h3>Pendências por responsável</h3>
+            <p class="muted">Cada pendência agora mostra o dono de gestão responsável por cobrar e regularizar.</p>
           </div>
           <div class="helper-card small">Total visível para seu acesso: <strong>${pendencies.length}</strong></div>
         </div>
-        ${pendencies.length ? Object.entries(byResponsible).map(([name, items]) => `
+        ${pendencies.length ? Object.entries(byResponsible).map(([name, group]) => `
           <div class="responsible-group">
-            <div class="list-item-head"><h4>${name}</h4><span class="badge-count">${items.length}</span></div>
+            <div class="list-item-head">
+              <div>
+                <h4>${escapeHtml(name)}${group.ownerArea ? ` — ${escapeHtml(group.ownerArea)}` : ''}</h4>
+                ${group.ownerReason ? `<small class="muted">${escapeHtml(group.ownerReason)}</small>` : ''}
+              </div>
+              <span class="badge-count">${group.items.length}</span>
+            </div>
             <div class="list">
-              ${items.map((item) => `
-                <div class="list-item pendency-item ${item.priority === 'danger' ? 'critical' : ''}">
+              ${group.items.map((item) => `
+                <div class="list-item">
                   <div class="list-item-head">
-                    <strong>${item.area}</strong>
+                    <strong>${escapeHtml(item.area)}</strong>
                     ${item.priority === 'danger' ? statusTag('danger') : item.priority === 'info' ? statusTag('info') : statusTag('warn')}
                   </div>
-                  <p>${item.description}</p>
-                  <small class="muted">Loja: ${getStoreById(item.storeId)?.name || '-'} • Rota: ${getRouteById(item.routeId)?.name || '-'}</small>
-                  ${renderPendencyActionButton(item)}
+                  <p>${escapeHtml(item.description)}</p>
+                  <small class="muted">Operacional: ${escapeHtml(item.responsibleName || '-')} • Loja: ${escapeHtml(getStoreById(item.storeId)?.name || '-')} • Rota: ${escapeHtml(getRouteById(item.routeId)?.name || '-')} ${item.date ? `• Data: ${formatDateBR(item.date)}` : ''}</small>
                 </div>
               `).join('')}
             </div>
@@ -10953,9 +11014,7 @@ function renderCargaGoiania() {
   const latest = (appState.movements.goianiaLoads || []).filter((item) => item.date === date)[0];
   const goianiaRoutes = appState.routes.filter((route) => isGoianiaRoute(route.id));
   return `
-    <div class="stack">
-      ${renderGoianiaFlowGuide('carga')}
-      <div class="grid-2">
+    <div class="grid-2">
       <div class="card">
         <div class="page-header">
           <div>
@@ -11019,7 +11078,6 @@ function renderCargaGoiania() {
         </div>
         ${latest ? `<div class="alert-strip ${latest.hasDivergence ? 'critical' : 'info'}"><div><strong>Última validação de hoje</strong><p class="muted">${latest.totalLoaded} caixas validadas por ${getUserById(latest.driverId)?.name || latest.createdBy || '-'}.</p></div></div>` : ''}
       </div>
-      </div>
     </div>
   `;
 }
@@ -11040,7 +11098,6 @@ function renderDistribuicaoGoiania() {
   const supportStockTotal = sumQty(getStoreStock(SUPPORT_POINT_STORE_ID));
   return `
     <div class="stack">
-      ${renderGoianiaFlowGuide('distribuicao')}
       <div class="grid-2">
         <div class="card">
           <div class="page-header">
@@ -11591,9 +11648,6 @@ function renderConfiguracoes() {
 }
 
 function bindViewEvents() {
-  document.querySelectorAll('[data-go-view]').forEach((button) => {
-    button.addEventListener('click', () => goToView(button.dataset.goView));
-  });
   document.querySelectorAll('.btn-go-inventory').forEach((button) => {
     button.addEventListener('click', () => {
       currentView = 'inventario';
@@ -12950,6 +13004,54 @@ function bindInventarioEvents() {
 }
 
 function bindDivergenciasEvents() {
+  const filterForm = document.getElementById('form-divergence-filter');
+  if (filterForm) {
+    filterForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      viewFilters.divergenciaOwner = filterForm.elements.owner?.value || '';
+      viewFilters.divergenciaType = filterForm.elements.type?.value || '';
+      viewFilters.divergenciaDate = filterForm.elements.date?.value || '';
+      viewFilters.divergenciaSearch = filterForm.elements.search?.value || '';
+      render();
+    });
+  }
+
+  document.getElementById('btn-clear-divergence-filter')?.addEventListener('click', () => {
+    viewFilters.divergenciaOwner = '';
+    viewFilters.divergenciaType = '';
+    viewFilters.divergenciaDate = '';
+    viewFilters.divergenciaSearch = '';
+    render();
+  });
+
+  document.getElementById('select-all-divergences')?.addEventListener('change', (event) => {
+    document.querySelectorAll('.bulk-divergence-checkbox').forEach((checkbox) => {
+      checkbox.checked = event.currentTarget.checked;
+    });
+  });
+
+  const bulkForm = document.getElementById('form-bulk-divergences');
+  if (bulkForm) {
+    bulkForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const ids = [...document.querySelectorAll('.bulk-divergence-checkbox:checked')].map((input) => input.value);
+      if (!ids.length) {
+        showToast('Selecione pelo menos uma divergência.', 'error');
+        return;
+      }
+      const action = bulkForm.elements.action?.value || 'regularizacao_administrativa';
+      const reason = String(bulkForm.elements.reason?.value || '').trim();
+      if (reason.length < 8) {
+        showToast('Informe um motivo obrigatório mais detalhado.', 'error');
+        return;
+      }
+      const message = `Confirmar ação em lote em ${ids.length} divergência(s)?`;
+      if (!window.confirm(message)) return;
+      const result = await persistMutation('BULK_UPDATE_DIVERGENCES', { ids, action, reason }, 'Ação em lote aplicada nas divergências.');
+      if (result.ok) render();
+    });
+  }
+
   document.querySelectorAll('.btn-view-divergence').forEach((button) => {
     button.addEventListener('click', () => {
       openDivergenceDetails(button.dataset.id);
