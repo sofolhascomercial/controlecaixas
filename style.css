@@ -723,7 +723,7 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   .btn{min-height:46px; border-radius:14px; padding:12px 14px}
 
   .app-shell{min-height:100dvh}
-  .main-area{min-height:100dvh; padding-bottom:0}
+  .main-area{min-height:100dvh; padding-bottom:84px}
 
   .sidebar{width:min(92vw,340px); padding:14px; border-radius:0 22px 22px 0}
   .sidebar-brand{padding:12px}
@@ -816,7 +816,22 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
 
   .toast{left:12px; right:12px; bottom:18px; max-width:none; text-align:center}
 
-  .mobile-quick-nav{display:none!important}
+  .mobile-quick-nav{
+    position:fixed;
+    left:10px;
+    right:10px;
+    bottom:10px;
+    z-index:90;
+    display:grid!important;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:8px;
+    padding:8px;
+    background:rgba(255,255,255,.96);
+    border:1px solid rgba(23,48,34,.10);
+    border-radius:22px;
+    box-shadow:0 14px 34px rgba(13,77,44,.18);
+    backdrop-filter:blur(10px);
+  }
   .mobile-nav-btn{
     position:relative;
     min-width:0;
@@ -851,6 +866,12 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
     color:#fff;
     font-size:.68rem;
   }
+  .quick-actions-grid{grid-template-columns:1fr!important}
+  .quick-action-card{padding:12px; border-radius:16px}
+  .today-pendency-strip{flex-direction:column; align-items:stretch}
+  .today-pendency-strip .btn{width:100%}
+  .flow-steps{grid-template-columns:1fr!important}
+
 }
 
 @media (max-width: 420px){
@@ -1053,3 +1074,99 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   border-radius:12px;
   font-size:.9rem;
 }
+
+/* ============================================================
+   MELHORIAS DE PRATICIDADE - AÇÕES RÁPIDAS E CHECKLIST
+   ------------------------------------------------------------
+   Ajustes somente visuais/operacionais. Não alteram banco,
+   caminho do Firebase, IDs, lojas, rotas nem histórico.
+   ============================================================ */
+.action-center-card{border-color:#cfe8d4}
+.action-center-head{align-items:flex-start}
+.quick-actions-grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:12px;
+}
+.quick-action-card{
+  width:100%;
+  border:1px solid #dfeae1;
+  background:#fbfdfb;
+  color:var(--text);
+  border-radius:18px;
+  padding:14px;
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:center;
+  gap:12px;
+  text-align:left;
+  cursor:pointer;
+  transition:.2s ease;
+  font:inherit;
+}
+.quick-action-card:hover{
+  transform:translateY(-1px);
+  border-color:#b8dfc2;
+  box-shadow:0 10px 24px rgba(13,77,44,.08);
+}
+.quick-action-card.has-count{background:#f6fbf7}
+.quick-action-icon{
+  width:42px;
+  height:42px;
+  display:grid;
+  place-items:center;
+  border-radius:14px;
+  background:#edf7ef;
+  font-size:1.2rem;
+}
+.quick-action-text{display:grid; gap:3px; min-width:0}
+.quick-action-text strong{font-size:.98rem}
+.quick-action-text small{color:var(--muted); line-height:1.35}
+.quick-action-count{
+  min-width:28px;
+  height:28px;
+  padding:0 8px;
+  display:grid;
+  place-items:center;
+  border-radius:999px;
+  background:var(--red);
+  color:#fff;
+  font-weight:800;
+  font-size:.82rem;
+}
+.today-pendency-strip{
+  margin-top:14px;
+  padding:14px;
+  border:1px solid #f0dcbe;
+  border-radius:18px;
+  background:#fff8ef;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:14px;
+}
+.today-pendency-strip.ok{
+  border-color:#cfe8d4;
+  background:#f3fbf5;
+}
+.pendency-summary-card .stats-inline{margin-top:8px}
+.pendency-item.critical{border-color:#f3c7c5; background:#fffafa}
+.flow-steps{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:10px;
+}
+.flow-step{
+  border:1px solid #dfeae1;
+  background:#fbfdfb;
+  border-radius:16px;
+  padding:12px;
+  display:grid;
+  gap:6px;
+}
+.flow-step.active{
+  border-color:#b8dfc2;
+  background:#edf7ef;
+}
+.flow-step strong{font-size:.92rem}
+.flow-step small{color:var(--muted); line-height:1.35}

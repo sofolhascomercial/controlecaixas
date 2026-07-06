@@ -4100,8 +4100,8 @@ const NAV_ITEMS = [
 
 const MOBILE_PRIORITY_BY_ROLE = {
   admin: ['dashboard', 'pendencias', 'fechamento', 'divergencias'],
-  cd: ['dashboard', 'saidas', 'resumoEnvios', 'retornos'],
-  driver: ['dashboard', 'entregasMotorista', 'recolhimentos', 'caixasOcupadas'],
+  cd: ['dashboard', 'saidas', 'retornos', 'pendencias'],
+  driver: ['dashboard', 'entregasMotorista', 'recolhimentos', 'pendencias'],
   promoter: ['dashboard', 'recebimentos', 'caixasLiberadas', 'pendencias'],
   viewer: ['dashboard', 'estoque', 'divergencias'],
 };
@@ -7377,8 +7377,216 @@ function renderCurrentView() {
 }
 
 function renderMobileQuickNav() {
-  // Barra inferior mobile removida a pedido: navegação apenas pelo botão de menu (☰).
-  if (els.mobileQuickNav) els.mobileQuickNav.innerHTML = '';
+  if (!els.mobileQuickNav || !currentUser) return;
+  if (typeof needsReliefDriverRouteSelection === 'function' && needsReliefDriverRouteSelection(currentUser)) {
+    els.mobileQuickNav.innerHTML = '';
+    return;
+  }
+  const counts = getDynamicCounts();
+  const priority = MOBILE_PRIORITY_BY_ROLE[currentUser.role] || ['dashboard', 'pendencias'];
+  const items = priority
+    .filter((viewKey) => canAccessView(viewKey, currentUser))
+    .map((viewKey) => NAV_ITEMS.find((item) => item.key === viewKey))
+    .filter(Boolean);
+
+  els.mobileQuickNav.innerHTML = items.map((item) => `
+    <button type="button" class="mobile-nav-btn ${currentView === item.key ? 'active' : ''}" data-go-view="${item.key}">
+      <span class="mobile-nav-icon">${MOBILE_ICON_BY_VIEW[item.key] || '•'}</span>
+      <span>${getShortViewLabel(item.key)}</span>
+      ${counts[item.key] ? `<small>${counts[item.key]}</small>` : ''}
+    </button>
+  `).join('');
+}
+
+function getShortViewLabel(viewKey) {
+  const labels = {
+    dashboard: 'Início',
+    saidas: 'Saídas',
+    resumoEnvios: 'Envios',
+    entregasMotorista: 'Entregar',
+    recebimentos: 'Receber',
+    recolhimentos: 'Recolher',
+    caixasOcupadas: 'Ocupadas',
+    caixasLiberadas: 'Liberadas',
+    retornos: 'Retorno',
+    estoque: 'Estoque',
+    inventario: 'Inventário',
+    divergencias: 'Diverg.',
+    alertas: 'Alertas',
+    fechamento: 'Fechar',
+    pendencias: 'Pendências',
+    cargaGoiania: 'Carga GO',
+    distribuicaoGoiania: 'GO',
+    relatorios: 'Relatórios',
+  };
+  return labels[viewKey] || (VIEW_META[viewKey]?.title || viewKey);
+}
+
+function goToView(viewKey) {
+  if (!canAccessView(viewKey, currentUser)) return;
+  currentView = viewKey;
+  render();
+  els.sidebar?.classList.remove('open');
+}
+
+function getActionCountForView(viewKey) {
+  const date = todayStr();
+  if (!appState) return 0;
+  if (viewKey === 'pendencias') return getVisiblePendenciesForCurrentUser(date).length;
+  if (viewKey === 'divergencias') return getVisibleDivergences(appState, currentUser).filter((item) => item.status === 'aberta').length;
+  if (viewKey === 'entregasMotorista') {
+    const driverRouteIds = currentUser.role === 'driver' ? getDriverRouteIds(currentUser, appState, date) : [];
+    return appState.movements.outbounds.filter((item) => {
+      if (!isActiveMovement(item) || item.status === 'historico' || item.driverDeliveryId || (appState.movements.driverDeliveries || []).some((delivery) => isActiveMovement(delivery) && delivery.outboundId === item.id)) return false;
+      if (currentUser.role === 'driver') {
+        return item.date === date && (item.driverId === currentUser.id || driverRouteIds.includes(item.routeId) || getOutboundResponsibleDriver(item) === currentUser.id);
+      }
+      return item.date === date;
+    }).length;
+  }
+  if (viewKey === 'recebimentos') {
+    const storeFilter = currentUser.role === 'promoter' ? currentUser.storeId : '';
+    return appState.movements.outbounds.filter((item) => {
+      const store = getStoreById(item.storeId);
+      return isActiveMovement(item) && item.date === date && !item.receiptId && !(appState.movements.receipts || []).some((receipt) => isActiveMovement(receipt) && receipt.outboundId === item.id) && item.status !== 'historico' && storeRequiresPromoter(store) && (!storeFilter || item.storeId === storeFilter);
+    }).length;
+  }
+  if (viewKey === 'retornos') {
+    return appState.movements.pickups.filter((item) => item.date === date && isActiveMovement(item) && !item.returnId && isMovementVisibleToUser(item, currentUser, appState)).length;
+  }
+  if (viewKey === 'saidas') {
+    return getActiveStores().filter((store) => storeHasPendingOutboundForUser(store.id, date, currentUser, appState)).length;
+  }
+  return 0;
+}
+
+function getDailyActionCards() {
+  const role = currentUser?.role;
+  const base = {
+    admin: [
+      { view: 'pendencias', title: 'Ver pendências', desc: 'Cobrar o que ainda falta concluir hoje.', icon: '📌' },
+      { view: 'fechamento', title: 'Fechamento do dia', desc: 'Conferir pendências e encerrar a operação.', icon: '✅' },
+      { view: 'divergencias', title: 'Divergências abertas', desc: 'Analisar diferenças e responsabilidades.', icon: '⚠️' },
+      { view: 'relatorios', title: 'Relatórios', desc: 'Acompanhar saldo por loja, rota e rede.', icon: '📈' },
+    ],
+    cd: [
+      { view: 'saidas', title: 'Registrar saídas', desc: 'Lançar caixas que saíram do CD.', icon: '📦' },
+      { view: 'retornos', title: 'Confirmar retornos', desc: 'Conferir caixas vazias devolvidas ao CD.', icon: '🏭' },
+      { view: 'resumoEnvios', title: 'Resumo de envios', desc: 'Ver lojas já lançadas e pendentes.', icon: '📋' },
+      { view: 'pendencias', title: 'Pendências do CD', desc: 'Resolver o que impede o fechamento.', icon: '📌' },
+    ],
+    driver: [
+      { view: 'entregasMotorista', title: 'Confirmar entrega', desc: 'Informar total deixado na loja.', icon: '🚚' },
+      { view: 'recolhimentos', title: 'Registrar recolhimento', desc: 'Lançar caixas vazias recolhidas.', icon: '↩️' },
+      { view: 'caixasOcupadas', title: 'Caixas ocupadas', desc: 'Informar caixas que ficaram na loja.', icon: '🚧' },
+      { view: 'pendencias', title: 'Minhas pendências', desc: 'Ver o que ainda falta na rota.', icon: '📌' },
+    ],
+    promoter: [
+      { view: 'recebimentos', title: 'Confirmar recebimento', desc: 'Conferir folhagens e bandejas recebidas.', icon: '✅' },
+      { view: 'caixasLiberadas', title: 'Caixas liberadas', desc: 'Informar caixas vazias disponíveis.', icon: '📦' },
+      { view: 'inventario', title: 'Inventário', desc: 'Corrigir saldo físico quando solicitado.', icon: '🧾' },
+      { view: 'pendencias', title: 'Pendências da loja', desc: 'Ver tarefas em aberto.', icon: '📌' },
+    ],
+    viewer: [
+      { view: 'estoque', title: 'Estoque em loja', desc: 'Ver saldos acumulados por loja.', icon: '📊' },
+      { view: 'divergencias', title: 'Divergências', desc: 'Acompanhar pontos de atenção.', icon: '⚠️' },
+      { view: 'dashboard', title: 'Visão geral', desc: 'Resumo da operação em tempo real.', icon: '🏠' },
+    ],
+  };
+  return (base[role] || base.viewer)
+    .filter((item) => canAccessView(item.view, currentUser))
+    .map((item) => ({ ...item, count: getActionCountForView(item.view) }));
+}
+
+function renderDailyActionCenter() {
+  const actions = getDailyActionCards();
+  const pendencies = getVisiblePendenciesForCurrentUser(todayStr()).slice(0, 3);
+  return `
+    <div class="card action-center-card">
+      <div class="section-header action-center-head">
+        <div>
+          <h3>O que fazer agora</h3>
+          <p>Ações rápidas para o seu perfil hoje, sem precisar procurar no menu.</p>
+        </div>
+        <div class="helper-card small">${ROLE_LABELS[currentUser.role] || 'Usuário'} • ${formatDateBR(todayStr())}</div>
+      </div>
+      <div class="quick-actions-grid">
+        ${actions.map((action) => `
+          <button type="button" class="quick-action-card ${action.count ? 'has-count' : ''}" data-go-view="${action.view}">
+            <span class="quick-action-icon">${action.icon}</span>
+            <span class="quick-action-text">
+              <strong>${action.title}</strong>
+              <small>${action.desc}</small>
+            </span>
+            ${action.count ? `<span class="quick-action-count">${action.count}</span>` : ''}
+          </button>
+        `).join('')}
+      </div>
+      ${pendencies.length ? `
+        <div class="today-pendency-strip">
+          <div>
+            <strong>${pendencies.length} pendência(s) em destaque</strong>
+            <p class="muted">${pendencies.map((item) => escapeHtml(item.area)).join(' • ')}</p>
+          </div>
+          <button type="button" class="btn btn-secondary" data-go-view="pendencias">Ver pendências</button>
+        </div>
+      ` : `
+        <div class="today-pendency-strip ok">
+          <div>
+            <strong>Nenhuma pendência visível para seu acesso agora</strong>
+            <p class="muted">Continue registrando as movimentações do dia normalmente.</p>
+          </div>
+        </div>
+      `}
+    </div>
+  `;
+}
+
+function getPendencyTargetView(item) {
+  const area = normalizeText(item?.area || '');
+  if (area.includes('recebimento') && canAccessView('recebimentos', currentUser)) return 'recebimentos';
+  if ((area.includes('entrega') || area.includes('motorista')) && canAccessView('entregasMotorista', currentUser)) return 'entregasMotorista';
+  if (area.includes('recolhimento') && canAccessView('recolhimentos', currentUser)) return 'recolhimentos';
+  if (area.includes('retorno') && canAccessView('retornos', currentUser)) return 'retornos';
+  if (area.includes('saida') && canAccessView('saidas', currentUser)) return 'saidas';
+  if (area.includes('inventario') && canAccessView('inventario', currentUser)) return 'inventario';
+  if (area.includes('diverg') && canAccessView('divergencias', currentUser)) return 'divergencias';
+  if (canAccessView('pendencias', currentUser)) return 'pendencias';
+  return getFirstAllowedView(currentUser);
+}
+
+function renderPendencyActionButton(item) {
+  const target = getPendencyTargetView(item);
+  if (!target || target === currentView) return '';
+  return `<div class="form-actions"><button type="button" class="btn btn-secondary" data-go-view="${target}">Resolver em ${VIEW_META[target]?.title || getShortViewLabel(target)}</button></div>`;
+}
+
+function renderGoianiaFlowGuide(activeStep = 'carga') {
+  const steps = [
+    { key: 'carga', title: '1. Carga principal', desc: 'Vinicius/Sebastião validam tudo que saiu para Goiânia.' },
+    { key: 'distribuicao', title: '2. Repasse aos freteiros', desc: 'Maycon, Alexsandro, Edmar ou reforço recebem apenas suas lojas.' },
+    { key: 'entregas', title: '3. Entregas nas lojas', desc: 'Cada motorista confirma o total deixado em sua rota.' },
+    { key: 'devolucao', title: '4. Devolução ao caminhão principal', desc: 'Freteiros devolvem vazias ao Vinicius/Sebastião.' },
+    { key: 'retorno', title: '5. Retorno ao CD', desc: 'CD confirma o total que voltou para a empresa.' },
+  ];
+  return `
+    <div class="card goiania-flow-card">
+      <div class="section-header">
+        <div>
+          <h3>Fluxo rápido de Goiânia</h3>
+          <p>Cadeia de responsabilidade para não misturar carga principal, freteiros e retorno.</p>
+        </div>
+      </div>
+      <div class="flow-steps">
+        ${steps.map((step) => `
+          <div class="flow-step ${step.key === activeStep ? 'active' : ''}">
+            <strong>${step.title}</strong>
+            <small>${step.desc}</small>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
 }
 
 function enhanceMobileTables() {
@@ -8556,6 +8764,7 @@ function renderDashboard() {
   return `
     <div class="stack">
       ${renderMandatoryInventoryNotice(todayStr())}
+      ${renderDailyActionCenter()}
       ${showCdForecast ? (metrics.company < forecast.predicted ? `
         <div class="alert-strip critical">
           <div>
@@ -10138,8 +10347,23 @@ function renderPendencias() {
     byResponsible[key] = byResponsible[key] || [];
     byResponsible[key].push(item);
   });
+  const dangerCount = pendencies.filter((item) => item.priority === 'danger').length;
+  const warnCount = pendencies.filter((item) => item.priority !== 'danger').length;
   return `
     <div class="stack">
+      <div class="card pendency-summary-card">
+        <div class="section-header">
+          <div>
+            <h3>Painel rápido de pendências</h3>
+            <p>Use esta tela como checklist do dia antes do fechamento.</p>
+          </div>
+        </div>
+        <div class="stats-inline">
+          <div class="stat-pill"><span>Total visível</span><strong>${pendencies.length}</strong></div>
+          <div class="stat-pill"><span>Críticas</span><strong>${dangerCount}</strong></div>
+          <div class="stat-pill"><span>Atenção</span><strong>${warnCount}</strong></div>
+        </div>
+      </div>
       <div class="card">
         <div class="page-header">
           <div>
@@ -10152,13 +10376,14 @@ function renderPendencias() {
             <div class="list-item-head"><h4>${name}</h4><span class="badge-count">${items.length}</span></div>
             <div class="list">
               ${items.map((item) => `
-                <div class="list-item">
+                <div class="list-item pendency-item ${item.priority === 'danger' ? 'critical' : ''}">
                   <div class="list-item-head">
                     <strong>${item.area}</strong>
                     ${item.priority === 'danger' ? statusTag('danger') : item.priority === 'info' ? statusTag('info') : statusTag('warn')}
                   </div>
                   <p>${item.description}</p>
                   <small class="muted">Loja: ${getStoreById(item.storeId)?.name || '-'} • Rota: ${getRouteById(item.routeId)?.name || '-'}</small>
+                  ${renderPendencyActionButton(item)}
                 </div>
               `).join('')}
             </div>
@@ -10725,7 +10950,9 @@ function renderCargaGoiania() {
   const latest = (appState.movements.goianiaLoads || []).filter((item) => item.date === date)[0];
   const goianiaRoutes = appState.routes.filter((route) => isGoianiaRoute(route.id));
   return `
-    <div class="grid-2">
+    <div class="stack">
+      ${renderGoianiaFlowGuide('carga')}
+      <div class="grid-2">
       <div class="card">
         <div class="page-header">
           <div>
@@ -10789,6 +11016,7 @@ function renderCargaGoiania() {
         </div>
         ${latest ? `<div class="alert-strip ${latest.hasDivergence ? 'critical' : 'info'}"><div><strong>Última validação de hoje</strong><p class="muted">${latest.totalLoaded} caixas validadas por ${getUserById(latest.driverId)?.name || latest.createdBy || '-'}.</p></div></div>` : ''}
       </div>
+      </div>
     </div>
   `;
 }
@@ -10809,6 +11037,7 @@ function renderDistribuicaoGoiania() {
   const supportStockTotal = sumQty(getStoreStock(SUPPORT_POINT_STORE_ID));
   return `
     <div class="stack">
+      ${renderGoianiaFlowGuide('distribuicao')}
       <div class="grid-2">
         <div class="card">
           <div class="page-header">
@@ -11359,6 +11588,9 @@ function renderConfiguracoes() {
 }
 
 function bindViewEvents() {
+  document.querySelectorAll('[data-go-view]').forEach((button) => {
+    button.addEventListener('click', () => goToView(button.dataset.goView));
+  });
   document.querySelectorAll('.btn-go-inventory').forEach((button) => {
     button.addEventListener('click', () => {
       currentView = 'inventario';
