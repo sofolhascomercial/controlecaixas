@@ -7857,6 +7857,102 @@ function getCompanyBoxTotals(state = appState) {
   };
 }
 
+
+function getCdReturnPendingGroups(state = appState, user = currentUser) {
+  const groups = new Map();
+  const ensureGroup = (date, routeId, driverId) => {
+    const key = `${date || ''}|${routeId || ''}|${driverId || ''}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        date: date || todayStr(),
+        routeId: routeId || '',
+        driverId: driverId || '',
+        pickupsCount: 0,
+        pickupTotal: 0,
+        freightReturnsCount: 0,
+        freightTotal: 0,
+        supportDropTotal: 0,
+        stores: new Set(),
+        oldestCreatedAt: '',
+        newestCreatedAt: '',
+      });
+    }
+    return groups.get(key);
+  };
+  const registerCreatedAt = (group, createdAt) => {
+    if (!createdAt) return;
+    if (!group.oldestCreatedAt || createdAt < group.oldestCreatedAt) group.oldestCreatedAt = createdAt;
+    if (!group.newestCreatedAt || createdAt > group.newestCreatedAt) group.newestCreatedAt = createdAt;
+  };
+
+  (state.movements.pickups || [])
+    .filter((item) => isActiveMovement(item) && !item.returnBatchId && !item.supportPointDropId && isMovementVisibleToUser(item, user, state))
+    .forEach((item) => {
+      const group = ensureGroup(item.date, item.routeId, item.driverId);
+      group.pickupsCount += 1;
+      group.pickupTotal += safeInt(item.totalQty ?? sumQty(item.qty));
+      if (item.storeId) group.stores.add(item.storeId);
+      registerCreatedAt(group, item.createdAt);
+    });
+
+  (state.movements.goianiaFreightReturns || [])
+    .filter((item) => isActiveMovement(item) && !item.cdReturnBatchId)
+    .forEach((item) => {
+      const driverId = item.receivedByDriverId || item.trunkDriverId || GOIANIA_TRUNK_DRIVER_IDS[0];
+      const synthetic = { date: item.date, routeId: GOIANIA_TRUNK_ROUTE_ID, driverId };
+      if (!isMovementVisibleToUser(synthetic, user, state)) return;
+      const group = ensureGroup(item.date, GOIANIA_TRUNK_ROUTE_ID, driverId);
+      group.freightReturnsCount += 1;
+      group.freightTotal += safeInt(item.totalReceived ?? item.totalQty ?? sumQty(item.qty));
+      registerCreatedAt(group, item.createdAt);
+    });
+
+  (state.movements.supportPointMovements || [])
+    .filter((item) => isActiveMovement(item) && item.action === 'drop' && !item.cdReturnBatchId)
+    .forEach((item) => {
+      const synthetic = { date: item.date, routeId: GOIANIA_TRUNK_ROUTE_ID, driverId: item.driverId };
+      if (!isMovementVisibleToUser(synthetic, user, state)) return;
+      const group = ensureGroup(item.date, GOIANIA_TRUNK_ROUTE_ID, item.driverId);
+      group.supportDropTotal += safeInt(item.totalQty ?? sumQty(item.qty));
+      registerCreatedAt(group, item.createdAt);
+    });
+
+  return Array.from(groups.values())
+    .map((group) => {
+      const expectedTotal = Math.max(0, group.pickupTotal + group.freightTotal - group.supportDropTotal);
+      const daysOpen = Math.max(0, Math.floor((new Date(`${todayStr()}T12:00:00`) - new Date(`${group.date}T12:00:00`)) / 86400000));
+      const storeNames = Array.from(group.stores)
+        .map((storeId) => getStoreById(storeId, state)?.name || '')
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+      return {
+        ...group,
+        expectedTotal,
+        daysOpen,
+        storeCount: group.stores.size,
+        storeNames,
+        routeName: getRouteById(group.routeId, state)?.name || '-',
+        driverName: getUserById(group.driverId, state)?.name || '-',
+      };
+    })
+    .filter((group) => group.expectedTotal > 0)
+    .sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      if (b.expectedTotal !== a.expectedTotal) return b.expectedTotal - a.expectedTotal;
+      return a.routeName.localeCompare(b.routeName, 'pt-BR');
+    });
+}
+
+function getCdReturnPendingSummary(state = appState, user = currentUser) {
+  const groups = getCdReturnPendingGroups(state, user);
+  const total = groups.reduce((acc, group) => acc + group.expectedTotal, 0);
+  const routes = new Set(groups.map((group) => group.routeId).filter(Boolean)).size;
+  const drivers = new Set(groups.map((group) => group.driverId).filter(Boolean)).size;
+  const oldest = groups.length ? groups.reduce((min, group) => group.date < min ? group.date : min, groups[0].date) : '';
+  return { groups, total, routes, drivers, oldest };
+}
+
 function getTodayMetrics(state = appState, user = currentUser) {
   const today = todayStr();
   const scopeUser = user?.role === 'promoter' ? { role: 'viewer' } : user;
@@ -9747,68 +9843,178 @@ function renderCaixasLiberadas() {
 function renderRetornos() {
   const today = todayStr();
   const routeOptions = appState.routes.map((route) => `<option value="${route.id}">${route.name}</option>`).join('');
+  const pendingSummary = getCdReturnPendingSummary(appState, currentUser);
+  const pendingGroups = pendingSummary.groups;
+  const pendingRouteOptions = [...new Map(pendingGroups.map((group) => [group.routeId, group.routeName])).entries()]
+    .sort((a, b) => a[1].localeCompare(b[1], 'pt-BR'))
+    .map(([routeId, routeName]) => `<option value="${routeId}">${routeName}</option>`)
+    .join('');
+  const pendingDriverOptions = [...new Map(pendingGroups.map((group) => [group.driverId, group.driverName])).entries()]
+    .sort((a, b) => a[1].localeCompare(b[1], 'pt-BR'))
+    .map(([driverId, driverName]) => `<option value="${driverId}">${driverName}</option>`)
+    .join('');
+  const oldGroups = pendingGroups.filter((group) => group.daysOpen >= 2).length;
+  const mostUrgent = pendingGroups[0];
   return `
-    <div class="grid-2">
+    <div class="stack">
       <div class="card">
         <div class="page-header">
           <div>
-            <h3>Confirmar retorno no CD</h3>
+            <h3>Visão rápida dos retornos pendentes</h3>
+            <p>Caixas recolhidas nas lojas que ainda não foram confirmadas como recebidas no CD.</p>
           </div>
+          <div class="helper-card small">Total em retorno: <strong>${pendingSummary.total}</strong> caixas</div>
         </div>
 
-        <form id="form-retorno" class="stack">
-          <div class="form-grid-3">
-            <label>Data
-              <input type="date" name="date" value="${today}" required />
-            </label>
-            <label>Rota
-              <select name="routeId" id="retorno-route" required>
-                <option value="">Selecione</option>
-                ${routeOptions}
-              </select>
-            </label>
-            <label>Motorista
-              <select name="driverId" id="retorno-driver" required>
-                <option value="">Selecione</option>
-                ${appState.users.filter((user) => user.role === 'driver').map((user) => `<option value="${user.id}">${user.name}</option>`).join('')}
-              </select>
-            </label>
+        <div class="cards-grid compact-metrics">
+          ${renderMetricCard('Em retorno ao CD', pendingSummary.total, '🔄', pendingSummary.total ? 'warning' : 'success', 'Caixas recolhidas e ainda sem retorno confirmado')}
+          ${renderMetricCard('Rotas pendentes', pendingSummary.routes, '🛣️', pendingSummary.routes ? 'warning' : 'success', 'Rotas com retorno aberto')}
+          ${renderMetricCard('Motoristas pendentes', pendingSummary.drivers, '🚚', pendingSummary.drivers ? 'warning' : 'success', 'Motoristas com caixas a devolver/conferir')}
+          ${renderMetricCard('Pendências antigas', oldGroups, '⏱️', oldGroups ? 'critical' : 'success', 'Grupos com 2 dias ou mais')}
+        </div>
+
+        ${mostUrgent ? `
+          <div class="alert-strip ${mostUrgent.daysOpen >= 2 ? 'critical' : 'info'}">
+            <div>
+              <strong>Pendência mais antiga: ${formatDateBR(mostUrgent.date)} • ${mostUrgent.routeName} • ${mostUrgent.driverName}</strong>
+              <div class="muted">${mostUrgent.expectedTotal} caixas aguardando conferência no CD. ${mostUrgent.storeCount} loja(s) envolvida(s).</div>
+            </div>
+            <button type="button" class="btn btn-primary btn-load-return-pending" data-date="${mostUrgent.date}" data-route-id="${mostUrgent.routeId}" data-driver-id="${mostUrgent.driverId}" data-total="${mostUrgent.expectedTotal}">Carregar no retorno</button>
           </div>
-
-          <div id="retorno-resumo" class="helper-card compact small">Selecione rota e motorista.</div>
-
-          <label>Total de caixas que chegou no caminhão
-            <input type="number" min="0" step="1" id="retorno-total" name="totalQty" value="0" required />
-          </label>
-
-          <label>Justificativa
-            <textarea name="justification" placeholder="Obrigatório quando o total que chegou no CD for diferente do total recolhido pelo motorista nas lojas."></textarea>
-          </label>
-
-          <div class="form-actions">
-            <button type="submit" class="btn btn-primary">Confirmar retorno</button>
+        ` : `
+          <div class="alert-strip info">
+            <div>
+              <strong>Nenhuma pendência de retorno no CD</strong>
+              <div class="muted">Todos os recolhimentos registrados já foram conferidos no CD.</div>
+            </div>
+            ${statusTag('ok')}
           </div>
-        </form>
+        `}
       </div>
 
       <div class="card">
         <div class="section-header">
           <div>
-            <h3>Retornos já lançados</h3>
+            <h3>Pendências de retorno ao CD</h3>
+            <p>Use os filtros para encontrar rapidamente qual rota, motorista ou data compõe o total em retorno.</p>
           </div>
+          <div class="helper-card small">${pendingGroups.length} grupo(s) pendente(s)</div>
         </div>
-        <div class="list">
-          ${appState.movements.returns.slice(0, 8).length ? appState.movements.returns.slice(0, 8).map((item) => `
-            <div class="list-item">
-              <div class="list-item-head">
-                <strong>${getRouteById(item.routeId)?.name || '-'}</strong>
-                <small class="muted">${formatDateTimeBR(item.createdAt)}</small>
-              </div>
-              <div class="muted">${getUserById(item.driverId)?.name || '-'}</div>
-              <div class="kpi-row"><span>Chegou no caminhão</span><strong>${safeInt(item.totalQty ?? sumQty(item.qty))} caixas</strong></div>
-              ${safeInt(item.expectedTotal ?? sumQty(item.expectedQty)) !== safeInt(item.totalQty ?? sumQty(item.qty)) ? '<span class="tag warn">Divergência aberta</span>' : statusTag('ok')}
+        <div class="form-grid-3">
+          <label>Filtrar por rota
+            <select id="retorno-pendente-rota-filter">
+              <option value="">Todas as rotas</option>
+              ${pendingRouteOptions}
+            </select>
+          </label>
+          <label>Filtrar por motorista
+            <select id="retorno-pendente-motorista-filter">
+              <option value="">Todos os motoristas</option>
+              ${pendingDriverOptions}
+            </select>
+          </label>
+          <label>Buscar loja, rota ou motorista
+            <input type="search" id="retorno-pendente-search" placeholder="Digite para filtrar" />
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Rota / motorista</th>
+                <th>Recolhimentos</th>
+                <th>Total pendente</th>
+                <th>Lojas</th>
+                <th>Status</th>
+                <th>Ação</th>
+              </tr>
+            </thead>
+            <tbody id="retorno-pendente-tbody">
+              ${pendingGroups.length ? pendingGroups.map((group) => {
+                const storesPreview = group.storeNames.slice(0, 4).join(', ');
+                const hiddenStores = Math.max(0, group.storeNames.length - 4);
+                const searchText = `${group.date} ${group.routeName} ${group.driverName} ${group.storeNames.join(' ')}`.toLowerCase().replace(/"/g, '&quot;');
+                return `
+                  <tr class="retorno-pending-row" data-route-id="${group.routeId}" data-driver-id="${group.driverId}" data-search="${escapeHtml(searchText)}">
+                    <td><strong>${formatDateBR(group.date)}</strong><br><small class="muted">${group.daysOpen} dia(s) aberto</small></td>
+                    <td><strong>${group.routeName}</strong><br><small class="muted">${group.driverName}</small></td>
+                    <td>${group.pickupsCount} recolhimento(s)${group.freightReturnsCount ? `<br><small class="muted">+ ${group.freightReturnsCount} devolução(ões) de frete Goiânia</small>` : ''}${group.supportDropTotal ? `<br><small class="muted">- ${group.supportDropTotal} no ponto de apoio</small>` : ''}</td>
+                    <td><strong>${group.expectedTotal} caixas</strong></td>
+                    <td>${group.storeCount || '-'} loja(s)<br><small class="muted">${storesPreview || '-'}${hiddenStores ? ` +${hiddenStores}` : ''}</small></td>
+                    <td>${group.daysOpen >= 2 ? '<span class="tag danger">Atrasado</span>' : '<span class="tag warn">Aguardando CD</span>'}</td>
+                    <td><button type="button" class="btn btn-secondary btn-load-return-pending" data-date="${group.date}" data-route-id="${group.routeId}" data-driver-id="${group.driverId}" data-total="${group.expectedTotal}">Carregar</button></td>
+                  </tr>
+                `;
+              }).join('') : `<tr><td colspan="7"><div class="empty">Nenhum retorno pendente.</div></td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="page-header">
+            <div>
+              <h3>Confirmar retorno no CD</h3>
+              <p>Carregue uma pendência acima ou selecione data, rota e motorista manualmente.</p>
             </div>
-          `).join('') : `<div class="empty">Nenhum retorno confirmado.</div>`}
+          </div>
+
+          <form id="form-retorno" class="stack">
+            <div class="form-grid-3">
+              <label>Data do retorno
+                <input type="date" name="date" value="${today}" required />
+              </label>
+              <label>Rota
+                <select name="routeId" id="retorno-route" required>
+                  <option value="">Selecione</option>
+                  ${routeOptions}
+                </select>
+              </label>
+              <label>Motorista
+                <select name="driverId" id="retorno-driver" required>
+                  <option value="">Selecione</option>
+                  ${appState.users.filter((user) => user.role === 'driver').map((user) => `<option value="${user.id}">${user.name}</option>`).join('')}
+                </select>
+              </label>
+            </div>
+
+            <div id="retorno-resumo" class="helper-card compact small">Selecione rota e motorista.</div>
+
+            <label>Total de caixas que chegou no caminhão
+              <input type="number" min="0" step="1" id="retorno-total" name="totalQty" value="0" required />
+            </label>
+
+            <label>Justificativa
+              <textarea name="justification" placeholder="Obrigatório quando o total que chegou no CD for diferente do total recolhido pelo motorista nas lojas."></textarea>
+            </label>
+
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Confirmar retorno</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="section-header">
+            <div>
+              <h3>Retornos já lançados</h3>
+            </div>
+          </div>
+          <div class="list">
+            ${appState.movements.returns.slice(0, 8).length ? appState.movements.returns.slice(0, 8).map((item) => `
+              <div class="list-item">
+                <div class="list-item-head">
+                  <strong>${getRouteById(item.routeId)?.name || '-'}</strong>
+                  <small class="muted">${formatDateTimeBR(item.createdAt)}</small>
+                </div>
+                <div class="muted">${getUserById(item.driverId)?.name || '-'}</div>
+                <div class="kpi-row"><span>Chegou no caminhão</span><strong>${safeInt(item.totalQty ?? sumQty(item.qty))} caixas</strong></div>
+                ${safeInt(item.expectedTotal ?? sumQty(item.expectedQty)) !== safeInt(item.totalQty ?? sumQty(item.qty)) ? '<span class="tag warn">Divergência aberta</span>' : statusTag('ok')}
+              </div>
+            `).join('') : `<div class="empty">Nenhum retorno confirmado.</div>`}
+          </div>
         </div>
       </div>
     </div>
@@ -12389,6 +12595,27 @@ function bindRetornosEvents() {
   const routeSelect = document.getElementById('retorno-route');
   const driverSelect = document.getElementById('retorno-driver');
   const summary = document.getElementById('retorno-resumo');
+  const totalInput = document.getElementById('retorno-total');
+  const routeFilter = document.getElementById('retorno-pendente-rota-filter');
+  const driverFilter = document.getElementById('retorno-pendente-motorista-filter');
+  const searchFilter = document.getElementById('retorno-pendente-search');
+  const pendingRows = Array.from(document.querySelectorAll('.retorno-pending-row'));
+
+  const refreshPendingFilter = () => {
+    const routeValue = routeFilter?.value || '';
+    const driverValue = driverFilter?.value || '';
+    const searchValue = normalizeText(searchFilter?.value || '');
+    pendingRows.forEach((row) => {
+      const matchesRoute = !routeValue || row.dataset.routeId === routeValue;
+      const matchesDriver = !driverValue || row.dataset.driverId === driverValue;
+      const matchesSearch = !searchValue || normalizeText(row.dataset.search || '').includes(searchValue);
+      row.style.display = matchesRoute && matchesDriver && matchesSearch ? '' : 'none';
+    });
+  };
+  routeFilter?.addEventListener('change', refreshPendingFilter);
+  driverFilter?.addEventListener('change', refreshPendingFilter);
+  searchFilter?.addEventListener('input', refreshPendingFilter);
+  refreshPendingFilter();
 
   const refreshSummary = () => {
     const date = form.date.value || todayStr();
@@ -12398,13 +12625,34 @@ function bindRetornosEvents() {
       summary.innerHTML = 'Selecione rota e motorista.';
       return;
     }
-    const pending = appState.movements.pickups.filter((item) => isActiveMovement(item) && item.date === date && item.routeId === routeId && item.driverId === driverId && !item.returnBatchId);
-    const total = pending.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+    const returnDriver = getUserById(driverId);
+    const isGoianiaTrunkReturn = routeId === GOIANIA_TRUNK_ROUTE_ID && isGoianiaTrunkUser(returnDriver);
+    const pending = appState.movements.pickups.filter((item) => isActiveMovement(item) && item.date === date && item.routeId === routeId && item.driverId === driverId && !item.returnBatchId && !item.supportPointDropId);
+    const pickupTotal = pending.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+    const freightTotal = isGoianiaTrunkReturn ? getPendingGoianiaFreightReturnsForCd(date, driverId).reduce((acc, item) => acc + safeInt(item.totalReceived), 0) : 0;
+    const supportDropTotal = isGoianiaTrunkReturn ? getSupportPointDropTotalForDriver(date, driverId) : 0;
+    const expectedTotal = Math.max(0, pickupTotal + freightTotal - supportDropTotal);
+    const storeCount = new Set(pending.map((item) => item.storeId).filter(Boolean)).size;
     summary.innerHTML = `
       <strong>${getRouteById(routeId)?.name || '-'}</strong> • ${getUserById(driverId)?.name || '-'}<br>
-      ${pending.length ? 'Há recolhimentos pendentes para conferência no CD.' : 'Não há recolhimentos pendentes para essa seleção.'}
+      ${expectedTotal ? `Pendente para conferir no CD: <strong>${expectedTotal}</strong> caixas • ${pending.length} recolhimento(s) • ${storeCount} loja(s).` : 'Não há recolhimentos pendentes para essa seleção.'}
+      ${freightTotal ? `<br><small class="muted">Inclui ${freightTotal} caixa(s) devolvidas por freteiros de Goiânia.</small>` : ''}
+      ${supportDropTotal ? `<br><small class="muted">Desconta ${supportDropTotal} caixa(s) deixadas no ponto de apoio.</small>` : ''}
     `;
   };
+
+  document.querySelectorAll('.btn-load-return-pending').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (!form) return;
+      form.date.value = button.dataset.date || todayStr();
+      routeSelect.value = button.dataset.routeId || '';
+      driverSelect.value = button.dataset.driverId || '';
+      totalInput.value = button.dataset.total || '0';
+      refreshSummary();
+      form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      totalInput.focus();
+    });
+  });
 
   routeSelect.addEventListener('change', refreshSummary);
   driverSelect.addEventListener('change', refreshSummary);
