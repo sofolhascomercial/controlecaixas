@@ -4141,6 +4141,21 @@ const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', res
 let firebaseDb = null;
 let firebaseRootRef = null;
 let unsubscribeFirebase = null;
+let dynamicCountsCache = { key: '', value: null };
+let renderQueued = false;
+
+function invalidateUiCaches() {
+  dynamicCountsCache = { key: '', value: null };
+}
+
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  window.requestAnimationFrame(() => {
+    renderQueued = false;
+    render();
+  });
+}
 
 const els = {
   loginScreen: document.getElementById('login-screen'),
@@ -4193,8 +4208,9 @@ function bindBaseEvents() {
     if (backendMode === 'local' && event.key === STORAGE_KEY) {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        appState = JSON.parse(saved);
-        render();
+        appState = ensureStateShape(JSON.parse(saved));
+        invalidateUiCaches();
+        scheduleRender();
       }
     }
   });
@@ -5574,9 +5590,15 @@ async function loadState() {
         await firebaseRootRef.set(sanitizeForFirebase(state));
       }
 
+      let firstFirebaseSnapshot = true;
       unsubscribeFirebase = firebaseRootRef.on('value', (snapshot) => {
         appState = ensureStateShape(snapshot.val() || createSeedState());
-        render();
+        invalidateUiCaches();
+        if (firstFirebaseSnapshot) {
+          firstFirebaseSnapshot = false;
+          return;
+        }
+        scheduleRender();
       });
 
       return state;
@@ -5633,6 +5655,7 @@ async function persistMutation(mutationType, payload, successMessage, actorOverr
     saveLocalState(appState);
   }
 
+  invalidateUiCaches();
   showToast(successMessage || 'Ação salva com sucesso.');
   if (!options.skipRender) render();
   return { ok: true };
@@ -7679,17 +7702,55 @@ function renderSidebar() {
   });
 }
 
+
+function getFastAlertCount(state = appState, user = currentUser) {
+  let count = 0;
+  const forecast = getForecast(state);
+  const companyTotal = sumQty(getCdStock(state));
+  const safetyTarget = forecast.predicted + safeInt(state.settings.safetyMargin);
+
+  if (['admin', 'viewer', 'cd'].includes(user?.role)) {
+    if (companyTotal < forecast.predicted || companyTotal < safetyTarget) count += 1;
+  }
+
+  getStoreStockRows(state, user).forEach((row) => {
+    if (row.isHigh) count += 1;
+  });
+
+  count += getVisibleDivergences(state, user).filter((div) => div.status === 'aberta').length;
+  count += (state.movements.occupiedBoxes || []).filter((item) => isActiveMovement(item) && isMovementVisibleToUser(item, user, state)).length;
+  return count;
+}
+
 function getDynamicCounts() {
-  const alerts = getAllAlerts(appState);
+  const key = [
+    appState?.lastUpdatedAt || '',
+    currentUser?.id || '',
+    currentUser?.role || '',
+    todayStr(),
+    appState?.divergences?.length || 0,
+    appState?.movements?.outbounds?.length || 0,
+    appState?.movements?.driverDeliveries?.length || 0,
+    appState?.movements?.receipts?.length || 0,
+    appState?.movements?.pickups?.length || 0,
+    appState?.mandatoryInventories?.length || 0,
+  ].join('|');
+
+  if (dynamicCountsCache.key === key && dynamicCountsCache.value) {
+    return dynamicCountsCache.value;
+  }
+
   const openDivergences = getVisibleDivergences(appState, currentUser).filter((div) => div.status === 'aberta').length;
   const pendingCount = getVisiblePendenciesForCurrentUser(todayStr()).length;
   const mandatoryCount = getPendingMandatoryInventoriesForUser(currentUser, todayStr(), appState).length;
-  return {
+  const counts = {
     divergencias: openDivergences,
-    alertas: alerts.length + mandatoryCount,
+    alertas: getFastAlertCount(appState, currentUser) + mandatoryCount,
     pendencias: pendingCount,
     inventario: mandatoryCount,
   };
+  dynamicCountsCache = { key, value: counts };
+  return counts;
 }
 
 function renderCurrentView() {
@@ -8709,16 +8770,22 @@ function getStoreDayRows(date = todayStr(), state = appState) {
   return rows.sort((a, b) => (a.route?.name || '').localeCompare(b.route?.name || '', 'pt-BR') || (a.store?.name || '').localeCompare(b.store?.name || '', 'pt-BR'));
 }
 
+
 function getOperationalPendencies(date = todayStr(), state = appState) {
   const pendencies = [];
+  const activeDriverDeliveries = (state.movements.driverDeliveries || []).filter(isActiveMovement);
+  const activeReceipts = (state.movements.receipts || []).filter(isActiveMovement);
+  const deliveryByOutbound = new Map(activeDriverDeliveries.map((item) => [item.outboundId, item]));
+  const receiptByOutbound = new Map(activeReceipts.map((item) => [item.outboundId, item]));
+
   const outbounds = state.movements.outbounds.filter((item) => isActiveMovement(item) && item.date === date && item.status !== 'historico');
 
   outbounds.forEach((outbound) => {
     const store = getStoreById(outbound.storeId, state);
     const transfer = getOutboundTransfer(outbound.id, state);
     const driverId = getOutboundResponsibleDriver(outbound, state);
-    const driverDelivery = (state.movements.driverDeliveries || []).find((item) => isActiveMovement(item) && item.outboundId === outbound.id);
-    const receipt = state.movements.receipts.find((item) => isActiveMovement(item) && item.outboundId === outbound.id);
+    const driverDelivery = deliveryByOutbound.get(outbound.id);
+    const receipt = receiptByOutbound.get(outbound.id);
     const context = { storeId: outbound.storeId, routeId: outbound.routeId };
 
     if (isGoianiaRoute(outbound.routeId) && !transfer && !driverDelivery) {
@@ -8828,13 +8895,19 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
   return pendencies;
 }
 
+
 function getOverdueDriverDeliveryPendenciesForAdmin(state = appState, today = todayStr()) {
+  const deliveredOutboundIds = new Set(
+    (state.movements.driverDeliveries || [])
+      .filter(isActiveMovement)
+      .map((delivery) => delivery.outboundId)
+  );
+
   return (state.movements.outbounds || [])
     .filter((outbound) => {
       if (!isActiveMovement(outbound) || outbound.status === 'historico') return false;
       if (!outbound.date || outbound.date >= today) return false;
-      if (outbound.driverDeliveryId) return false;
-      if ((state.movements.driverDeliveries || []).some((delivery) => isActiveMovement(delivery) && delivery.outboundId === outbound.id)) return false;
+      if (outbound.driverDeliveryId || deliveredOutboundIds.has(outbound.id)) return false;
       const store = getStoreById(outbound.storeId, state);
       return storeRequiresDriver(store);
     })
@@ -9923,6 +9996,8 @@ function renderRetornos() {
   const routeOptions = appState.routes.map((route) => `<option value="${route.id}">${route.name}</option>`).join('');
   const pendingSummary = getCdReturnPendingSummary(appState, currentUser);
   const pendingGroups = pendingSummary.groups;
+  const RETURN_RENDER_LIMIT = 120;
+  const pendingGroupsPage = pendingGroups.slice(0, RETURN_RENDER_LIMIT);
   const pendingRouteOptions = [...new Map(pendingGroups.map((group) => [group.routeId, group.routeName])).entries()]
     .sort((a, b) => a[1].localeCompare(b[1], 'pt-BR'))
     .map(([routeId, routeName]) => `<option value="${routeId}">${routeName}</option>`)
@@ -9976,7 +10051,7 @@ function renderRetornos() {
             <h3>Pendências de retorno ao CD</h3>
             <p>Use os filtros para encontrar rapidamente qual rota, motorista ou data compõe o total em retorno.</p>
           </div>
-          <div class="helper-card small">${pendingGroups.length} grupo(s) pendente(s)</div>
+          <div class="helper-card small">${pendingGroups.length} grupo(s) pendente(s)<br>Exibindo agora: <strong>${pendingGroupsPage.length}</strong></div>
         </div>
         <div class="form-grid-3">
           <label>Filtrar por rota
@@ -10031,7 +10106,7 @@ function renderRetornos() {
               </tr>
             </thead>
             <tbody id="retorno-pendente-tbody">
-              ${pendingGroups.length ? pendingGroups.map((group) => {
+              ${pendingGroupsPage.length ? pendingGroupsPage.map((group) => {
                 const storesPreview = group.storeNames.slice(0, 4).join(', ');
                 const hiddenStores = Math.max(0, group.storeNames.length - 4);
                 const searchText = `${group.date} ${group.routeName} ${group.driverName} ${group.storeNames.join(' ')}`.toLowerCase().replace(/"/g, '&quot;');
@@ -10048,6 +10123,7 @@ function renderRetornos() {
                   </tr>
                 `;
               }).join('') : `<tr><td colspan="8"><div class="empty">Nenhum retorno pendente.</div></td></tr>`}
+              ${pendingGroups.length > pendingGroupsPage.length ? `<tr><td colspan="8"><div class="helper-card small">Mostrando os primeiros ${pendingGroupsPage.length} de ${pendingGroups.length} grupos. Use os filtros de rota, motorista ou busca para trabalhar com menos pendências de uma vez.</div></td></tr>` : ''}
             </tbody>
           </table>
         </div>
@@ -10658,6 +10734,10 @@ function renderDivergencias() {
   const open = filtered.filter((item) => item.status === 'aberta');
   const resolved = filtered.filter((item) => item.status === 'resolvida');
   const openTotal = visibleDivergences.filter((item) => item.status === 'aberta').length;
+  const OPEN_RENDER_LIMIT = 80;
+  const RESOLVED_RENDER_LIMIT = 20;
+  const openPage = open.slice(0, OPEN_RENDER_LIMIT);
+  const resolvedPage = resolved.slice(0, RESOLVED_RENDER_LIMIT);
 
   return `
     <div class="stack">
@@ -10667,7 +10747,7 @@ function renderDivergencias() {
             <h3>Central de regularização</h3>
             <p class="muted">Filtre, selecione e regularize divergências em lote sem apagar o histórico.</p>
           </div>
-          <div class="helper-card small">Abertas no sistema: <strong>${openTotal}</strong><br>Exibidas no filtro: <strong>${open.length}</strong></div>
+          <div class="helper-card small">Abertas no sistema: <strong>${openTotal}</strong><br>No filtro: <strong>${open.length}</strong><br>Renderizadas agora: <strong>${openPage.length}</strong></div>
         </div>
         <form id="form-divergence-filter" class="form-grid-3">
           <label>Responsável
@@ -10736,7 +10816,7 @@ function renderDivergencias() {
           </div>
           ${open.length ? `
             <div class="list">
-              ${open.map((item) => {
+              ${openPage.map((item) => {
                 const owner = getDivergenceOwnerInfo(item);
                 return `
                   <div class="list-item divergence-row" data-owner="${escapeHtml(owner.ownerKey)}" data-type="${escapeHtml(item.type || '')}">
@@ -10760,6 +10840,7 @@ function renderDivergencias() {
                   </div>
                 `;
               }).join('')}
+              ${open.length > openPage.length ? `<div class="helper-card small">Mostrando as primeiras ${openPage.length} de ${open.length} divergências em aberto. Use os filtros de responsável, tipo, data ou busca para refinar e carregar menos registros.</div>` : ''}
             </div>
           ` : `<div class="empty">Sem divergências em aberto para este filtro.</div>`}
         </div>
@@ -10772,7 +10853,7 @@ function renderDivergencias() {
           </div>
           ${resolved.length ? `
             <div class="list">
-              ${resolved.slice(0, 8).map((item) => `
+              ${resolvedPage.map((item) => `
                 <div class="list-item">
                   <div class="list-item-head">
                     <strong>${getDivergenceTitle(item)}</strong>
@@ -10786,6 +10867,7 @@ function renderDivergencias() {
                   </div>
                 </div>
               `).join('')}
+              ${resolved.length > resolvedPage.length ? `<div class="helper-card small">Mostrando ${resolvedPage.length} de ${resolved.length} resolvidas. Use os filtros para encontrar registros específicos.</div>` : ''}
             </div>
           ` : `<div class="empty">Nenhuma divergência resolvida neste filtro.</div>`}
         </div>
@@ -10897,9 +10979,11 @@ function renderFechamento() {
   `;
 }
 
+
 function renderPendencias() {
   const date = todayStr();
   const pendencies = getVisiblePendenciesForCurrentUser(date);
+  const PENDING_RENDER_LIMIT_PER_OWNER = 60;
   const byResponsible = {};
   pendencies.forEach((item) => {
     const key = item.ownerName || item.responsibleName || item.responsibleRole || 'Responsável';
@@ -10912,11 +10996,13 @@ function renderPendencias() {
         <div class="page-header">
           <div>
             <h3>Pendências por responsável</h3>
-            <p class="muted">Cada pendência agora mostra o dono de gestão responsável por cobrar e regularizar.</p>
+            <p class="muted">Cada pendência mostra o dono de gestão responsável por cobrar e regularizar. A tela abre leve: grupos muito grandes exibem os primeiros ${PENDING_RENDER_LIMIT_PER_OWNER} itens.</p>
           </div>
           <div class="helper-card small">Total visível para seu acesso: <strong>${pendencies.length}</strong></div>
         </div>
-        ${pendencies.length ? Object.entries(byResponsible).map(([name, group]) => `
+        ${pendencies.length ? Object.entries(byResponsible).map(([name, group]) => {
+          const visibleItems = group.items.slice(0, PENDING_RENDER_LIMIT_PER_OWNER);
+          return `
           <div class="responsible-group">
             <div class="list-item-head">
               <div>
@@ -10926,7 +11012,7 @@ function renderPendencias() {
               <span class="badge-count">${group.items.length}</span>
             </div>
             <div class="list">
-              ${group.items.map((item) => `
+              ${visibleItems.map((item) => `
                 <div class="list-item">
                   <div class="list-item-head">
                     <strong>${escapeHtml(item.area)}</strong>
@@ -10936,9 +11022,10 @@ function renderPendencias() {
                   <small class="muted">Operacional: ${escapeHtml(item.responsibleName || '-')} • Loja: ${escapeHtml(getStoreById(item.storeId)?.name || '-')} • Rota: ${escapeHtml(getRouteById(item.routeId)?.name || '-')} ${item.date ? `• Data: ${formatDateBR(item.date)}` : ''}</small>
                 </div>
               `).join('')}
+              ${group.items.length > visibleItems.length ? `<div class="helper-card small">Mostrando ${visibleItems.length} de ${group.items.length} pendências deste responsável. Use Divergências/Retornos/Inventário para regularizar em lote por data, rota, loja ou tipo.</div>` : ''}
             </div>
           </div>
-        `).join('') : `<div class="empty">Nenhuma pendência para o seu acesso nesta data.</div>`}
+        `}).join('') : `<div class="empty">Nenhuma pendência para o seu acesso nesta data.</div>`}
       </div>
     </div>
   `;
