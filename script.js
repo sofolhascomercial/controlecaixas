@@ -4587,9 +4587,15 @@ function getBoxTypeLabels(keys = []) {
 }
 
 function getPendingOutboundBoxTypesForStoreDate(storeId, date = todayStr(), user = currentUser, state = appState) {
+  const allowedTypes = user?.role === 'cd'
+    ? getAllowedBoxTypesForUser(user)
+    : BOX_TYPES.map((item) => item.key);
+
   const existing = getActiveOutboundForStoreDate(storeId, date, state);
-  if (existing) return [];
-  return user?.role === 'cd' ? getAllowedBoxTypesForUser(user) : BOX_TYPES.map((item) => item.key);
+  if (!existing) return allowedTypes;
+
+  const existingQty = sanitizeQty(existing.qty);
+  return allowedTypes.filter((boxKey) => safeInt(existingQty[boxKey]) <= 0);
 }
 
 function storeHasPendingOutboundForUser(storeId, date = todayStr(), user = currentUser, state = appState) {
@@ -6244,9 +6250,6 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (!driverId) return { ok: false, error: 'A rota desta loja não possui motorista vinculado. Corrija o motorista no ADM antes de salvar a saída.' };
 
     const existingOutbound = getActiveOutboundForStoreDate(store.id, outboundDate, state);
-    if (existingOutbound) {
-      return { ok: false, error: 'Esta loja já teve lançamento de entrega nessa data. Para corrigir a quantidade enviada, use o botão Editar em Saídas recentes.' };
-    }
     const conflicts = getOutboundQtyConflicts(store.id, outboundDate, qty, state);
     if (conflicts.length) {
       return { ok: false, error: `Esta loja já teve lançamento de ${getBoxTypeLabels(conflicts)} nessa data. Para corrigir, use o botão Editar em Saídas recentes.` };
@@ -11750,11 +11753,6 @@ function bindSaidasEvents() {
       return;
     }
     const qty = readQtyFromForm(form, 'saida');
-    if (getActiveOutboundForStoreDate(storeId, date, appState)) {
-      showToast('Esta loja já teve lançamento de entrega nessa data. Para corrigir a quantidade, use Editar em Saídas recentes.', 'error');
-      refreshStoreOptions();
-      return;
-    }
     const conflicts = getOutboundQtyConflicts(storeId, date, qty, appState);
     if (conflicts.length) {
       showToast(`Esta loja já teve lançamento de ${getBoxTypeLabels(conflicts)} nessa data. Para corrigir, use Editar em Saídas recentes.`, 'error');
