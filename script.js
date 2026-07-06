@@ -5664,6 +5664,115 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     });
   };
 
+  const getCdReturnExpectation = (returnPayload) => {
+    const returnDate = returnPayload.date || todayStr();
+    const returnDriver = getUserById(returnPayload.driverId, state);
+    const isGoianiaTrunkReturn = returnPayload.routeId === GOIANIA_TRUNK_ROUTE_ID && isGoianiaTrunkUser(returnDriver);
+    const pendingPickups = state.movements.pickups.filter((item) =>
+      isActiveMovement(item) &&
+      item.date === returnDate &&
+      item.routeId === returnPayload.routeId &&
+      item.driverId === returnPayload.driverId &&
+      !item.returnBatchId &&
+      !item.supportPointDropId
+    );
+    const pendingFreightReturns = isGoianiaTrunkReturn ? getPendingGoianiaFreightReturnsForCd(returnDate, returnPayload.driverId, state) : [];
+    const pendingSupportDrops = isGoianiaTrunkReturn ? (state.movements.supportPointMovements || []).filter((item) =>
+      isActiveMovement(item) &&
+      item.date === returnDate &&
+      item.driverId === returnPayload.driverId &&
+      item.action === 'drop' &&
+      !item.cdReturnBatchId
+    ) : [];
+    const supportDropTotal = pendingSupportDrops.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+    const pickupQty = pendingPickups.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
+    const freightReturnTotal = pendingFreightReturns.reduce((acc, item) => acc + safeInt(item.totalReceived), 0);
+    const referenceQty = addQty(pickupQty, buildQtyFromTotal(freightReturnTotal, emptyQty()));
+    const expectedTotal = Math.max(0, sumQty(pickupQty) + freightReturnTotal - supportDropTotal);
+    const expectedQty = buildQtyFromTotal(expectedTotal, referenceQty);
+    return {
+      date: returnDate,
+      pendingPickups,
+      pendingFreightReturns,
+      pendingSupportDrops,
+      supportDropTotal,
+      expectedQty,
+      expectedTotal,
+    };
+  };
+
+  const confirmCdReturnInState = (returnPayload, options = {}) => {
+    const totalQty = safeInt(returnPayload.totalQty ?? sumQty(sanitizeQty(returnPayload.qty)));
+    if (totalQty <= 0) return { ok: false, error: 'Informe o total de caixas que chegou no caminhão.' };
+
+    const expectation = getCdReturnExpectation(returnPayload);
+    const { date, pendingPickups, pendingFreightReturns, pendingSupportDrops, supportDropTotal, expectedQty, expectedTotal } = expectation;
+    if (expectedTotal <= 0) return { ok: false, error: 'Não há recolhimentos pendentes para esta rota e motorista.' };
+
+    const qty = buildQtyFromTotal(totalQty, expectedQty);
+    state.cdStock = addQty(getCdStock(state), qty);
+
+    const returnBatchId = randomId('ret');
+    state.movements.returns.unshift({
+      id: returnBatchId,
+      date,
+      routeId: returnPayload.routeId,
+      driverId: returnPayload.driverId,
+      qty,
+      totalOnly: true,
+      totalQty,
+      expectedQty,
+      expectedTotal,
+      pickupsCount: pendingPickups.length,
+      freightReturnsCount: pendingFreightReturns.length,
+      supportDropTotal,
+      createdBy: actor.name,
+      createdById: actor.id,
+      createdAt: nowIso(),
+      justification: returnPayload.justification || '',
+      source: options.source || 'individual',
+      batchNote: options.batchNote || '',
+    });
+
+    pendingPickups.forEach((item) => {
+      item.returnBatchId = returnBatchId;
+    });
+    pendingFreightReturns.forEach((item) => {
+      item.cdReturnBatchId = returnBatchId;
+    });
+    pendingSupportDrops.forEach((item) => {
+      item.cdReturnBatchId = returnBatchId;
+    });
+
+    if (expectedTotal !== totalQty) {
+      openDivergence({
+        type: 'retorno_cd',
+        date,
+        routeId: returnPayload.routeId,
+        driverId: returnPayload.driverId,
+        storeId: null,
+        expectedQty,
+        actualQty: qty,
+        expectedTotal,
+        actualTotal: totalQty,
+        justification: returnPayload.justification || 'Diferença identificada entre o total recolhido nas lojas e o total que chegou ao CD.',
+        originJustification: returnPayload.justification || '',
+        responsibleUserId: returnPayload.driverId,
+        responsibleRole: 'driver',
+        requiresResponsibleExplanation: true,
+        responsibleExplanation: '',
+        responsibleExplanationAt: null,
+        responsibleExplanationBy: null,
+      });
+    }
+
+    if (options.audit !== false) {
+      audit('Retornos no CD', 'Conferência de retorno', `Rota ${getRouteById(returnPayload.routeId, state)?.name || '-'} retornou ${totalQty} caixas ao CD.`);
+    }
+
+    return { ok: true, returnBatchId, totalQty, expectedTotal };
+  };
+
   const divergenceMatchesOutbound = (divergence, outbound, types = []) => {
     if (!divergence || !outbound || !types.includes(divergence.type)) return false;
     if (divergence.outboundId && divergence.outboundId === outbound.id) return true;
@@ -6750,84 +6859,53 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
 
   if (type === 'CONFIRM_CD_RETURN') {
     if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode confirmar retorno.' };
-    const totalQty = safeInt(payload.totalQty ?? sumQty(sanitizeQty(payload.qty)));
-    if (totalQty <= 0) return { ok: false, error: 'Informe o total de caixas que chegou no caminhão.' };
+    const result = confirmCdReturnInState(payload, { source: 'individual' });
+    if (!result.ok) return result;
+  }
 
-    const returnDriver = getUserById(payload.driverId, state);
-    const isGoianiaTrunkReturn = payload.routeId === GOIANIA_TRUNK_ROUTE_ID && isGoianiaTrunkUser(returnDriver);
-    const pendingPickups = state.movements.pickups.filter((item) =>
-      isActiveMovement(item) &&
-      item.date === payload.date &&
-      item.routeId === payload.routeId &&
-      item.driverId === payload.driverId &&
-      !item.returnBatchId &&
-      !item.supportPointDropId
-    );
-    const pendingFreightReturns = isGoianiaTrunkReturn ? getPendingGoianiaFreightReturnsForCd(payload.date, payload.driverId, state) : [];
-    const pendingSupportDrops = isGoianiaTrunkReturn ? (state.movements.supportPointMovements || []).filter((item) => isActiveMovement(item) && item.date === payload.date && item.driverId === payload.driverId && item.action === 'drop' && !item.cdReturnBatchId) : [];
-    const supportDropTotal = pendingSupportDrops.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+  if (type === 'CONFIRM_CD_RETURN_BULK') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode confirmar retorno.' };
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    if (!items.length) return { ok: false, error: 'Selecione pelo menos um retorno pendente para confirmar.' };
 
-    const pickupQty = pendingPickups.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
-    const freightReturnTotal = pendingFreightReturns.reduce((acc, item) => acc + safeInt(item.totalReceived), 0);
-    const referenceQty = addQty(pickupQty, buildQtyFromTotal(freightReturnTotal, emptyQty()));
-    const expectedTotal = Math.max(0, sumQty(pickupQty) + freightReturnTotal - supportDropTotal);
-    const expectedQty = buildQtyFromTotal(expectedTotal, referenceQty);
-    if (expectedTotal <= 0) return { ok: false, error: 'Não há recolhimentos pendentes para esta rota e motorista.' };
-
-    const qty = buildQtyFromTotal(totalQty, expectedQty);
-    state.cdStock = addQty(getCdStock(state), qty);
-
-    const returnBatchId = randomId('ret');
-    state.movements.returns.unshift({
-      id: returnBatchId,
-      date: payload.date || todayStr(),
-      routeId: payload.routeId,
-      driverId: payload.driverId,
-      qty,
-      totalOnly: true,
-      totalQty,
-      expectedQty,
-      expectedTotal,
-      pickupsCount: pendingPickups.length,
-      freightReturnsCount: pendingFreightReturns.length,
-      supportDropTotal,
-      createdBy: actor.name,
-      createdById: actor.id,
-      createdAt: nowIso(),
-      justification: payload.justification || '',
-    });
-    pendingPickups.forEach((item) => {
-      item.returnBatchId = returnBatchId;
-    });
-    pendingFreightReturns.forEach((item) => {
-      item.cdReturnBatchId = returnBatchId;
-    });
-    pendingSupportDrops.forEach((item) => {
-      item.cdReturnBatchId = returnBatchId;
+    const prepared = items.map((item) => {
+      const expectation = getCdReturnExpectation(item);
+      return {
+        ...item,
+        totalQty: safeInt(item.totalQty || expectation.expectedTotal),
+        expectedTotal: expectation.expectedTotal,
+        routeName: getRouteById(item.routeId, state)?.name || '-',
+        driverName: getUserById(item.driverId, state)?.name || '-',
+      };
     });
 
-    if (expectedTotal !== totalQty) {
-      openDivergence({
-        type: 'retorno_cd',
-        date: payload.date,
-        routeId: payload.routeId,
-        driverId: payload.driverId,
-        storeId: null,
-        expectedQty,
-        actualQty: qty,
-        expectedTotal,
-        actualTotal: totalQty,
-        justification: payload.justification || 'Diferença identificada entre o total recolhido nas lojas e o total que chegou ao CD.',
-        originJustification: payload.justification || '',
-        responsibleUserId: payload.driverId,
-        responsibleRole: 'driver',
-        requiresResponsibleExplanation: true,
-        responsibleExplanation: '',
-        responsibleExplanationAt: null,
-        responsibleExplanationBy: null,
-      });
+    const invalid = prepared.find((item) => !item.date || !item.routeId || !item.driverId || safeInt(item.expectedTotal) <= 0);
+    if (invalid) {
+      return { ok: false, error: `Existe uma seleção sem pendência válida: ${invalid.routeName || '-'} • ${invalid.driverName || '-'}. Atualize a página e tente novamente.` };
     }
-    audit('Retornos no CD', 'Conferência de retorno', `Rota ${getRouteById(payload.routeId, state)?.name || '-'} retornou ${totalQty} caixas ao CD.`);
+
+    let confirmed = 0;
+    let totalConfirmed = 0;
+    const justification = String(payload.justification || '').trim();
+
+    for (const item of prepared) {
+      const result = confirmCdReturnInState({
+        date: item.date,
+        routeId: item.routeId,
+        driverId: item.driverId,
+        totalQty: item.totalQty,
+        justification,
+      }, {
+        audit: false,
+        source: 'lote',
+        batchNote: justification,
+      });
+      if (!result.ok) return result;
+      confirmed += 1;
+      totalConfirmed += safeInt(result.totalQty);
+    }
+
+    audit('Retornos no CD', 'Conferência de retorno em lote', `${confirmed} retorno(s) confirmados em lote, total de ${totalConfirmed} caixas.${justification ? ` Motivo: ${justification}` : ''}`);
   }
 
   if (type === 'CREATE_ROUTE_EXCEPTION') {
@@ -9917,10 +9995,32 @@ function renderRetornos() {
             <input type="search" id="retorno-pendente-search" placeholder="Digite para filtrar" />
           </label>
         </div>
+
+        <div class="helper-card compact">
+          <div class="section-header">
+            <div>
+              <strong>Retorno em lote</strong>
+              <p>Selecione várias pendências abaixo para confirmar todas no CD de uma só vez, usando o total esperado de cada rota/motorista.</p>
+            </div>
+            <div id="retorno-selected-summary" class="tag info">0 selecionado(s)</div>
+          </div>
+          <div class="form-actions">
+            <label class="checkbox-row">
+              <input type="checkbox" id="retorno-select-visible" />
+              Selecionar pendências visíveis
+            </label>
+            <button type="button" id="btn-confirm-selected-returns" class="btn btn-primary">Confirmar selecionados no CD</button>
+          </div>
+          <label>Justificativa para confirmação em lote
+            <textarea id="retorno-bulk-justification" placeholder="Exemplo: conferência física realizada no CD e retornos confirmados em lote pela gestão."></textarea>
+          </label>
+        </div>
+
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
+                <th>Sel.</th>
                 <th>Data</th>
                 <th>Rota / motorista</th>
                 <th>Recolhimentos</th>
@@ -9936,7 +10036,8 @@ function renderRetornos() {
                 const hiddenStores = Math.max(0, group.storeNames.length - 4);
                 const searchText = `${group.date} ${group.routeName} ${group.driverName} ${group.storeNames.join(' ')}`.toLowerCase().replace(/"/g, '&quot;');
                 return `
-                  <tr class="retorno-pending-row" data-route-id="${group.routeId}" data-driver-id="${group.driverId}" data-search="${escapeHtml(searchText)}">
+                  <tr class="retorno-pending-row" data-route-id="${group.routeId}" data-driver-id="${group.driverId}" data-date="${group.date}" data-total="${group.expectedTotal}" data-search="${escapeHtml(searchText)}">
+                    <td><input type="checkbox" class="retorno-pending-checkbox" data-date="${group.date}" data-route-id="${group.routeId}" data-driver-id="${group.driverId}" data-total="${group.expectedTotal}" /></td>
                     <td><strong>${formatDateBR(group.date)}</strong><br><small class="muted">${group.daysOpen} dia(s) aberto</small></td>
                     <td><strong>${group.routeName}</strong><br><small class="muted">${group.driverName}</small></td>
                     <td>${group.pickupsCount} recolhimento(s)${group.freightReturnsCount ? `<br><small class="muted">+ ${group.freightReturnsCount} devolução(ões) de frete Goiânia</small>` : ''}${group.supportDropTotal ? `<br><small class="muted">- ${group.supportDropTotal} no ponto de apoio</small>` : ''}</td>
@@ -9946,7 +10047,7 @@ function renderRetornos() {
                     <td><button type="button" class="btn btn-secondary btn-load-return-pending" data-date="${group.date}" data-route-id="${group.routeId}" data-driver-id="${group.driverId}" data-total="${group.expectedTotal}">Carregar</button></td>
                   </tr>
                 `;
-              }).join('') : `<tr><td colspan="7"><div class="empty">Nenhum retorno pendente.</div></td></tr>`}
+              }).join('') : `<tr><td colspan="8"><div class="empty">Nenhum retorno pendente.</div></td></tr>`}
             </tbody>
           </table>
         </div>
@@ -12600,6 +12701,35 @@ function bindRetornosEvents() {
   const driverFilter = document.getElementById('retorno-pendente-motorista-filter');
   const searchFilter = document.getElementById('retorno-pendente-search');
   const pendingRows = Array.from(document.querySelectorAll('.retorno-pending-row'));
+  const pendingCheckboxes = Array.from(document.querySelectorAll('.retorno-pending-checkbox'));
+  const selectVisible = document.getElementById('retorno-select-visible');
+  const selectedSummary = document.getElementById('retorno-selected-summary');
+  const confirmSelectedBtn = document.getElementById('btn-confirm-selected-returns');
+  const bulkJustification = document.getElementById('retorno-bulk-justification');
+
+  const getSelectedReturnItems = () => pendingCheckboxes
+    .filter((checkbox) => checkbox.checked)
+    .map((checkbox) => ({
+      date: checkbox.dataset.date,
+      routeId: checkbox.dataset.routeId,
+      driverId: checkbox.dataset.driverId,
+      totalQty: safeInt(checkbox.dataset.total),
+    }));
+
+  const refreshBulkSelection = () => {
+    const selected = getSelectedReturnItems();
+    const selectedTotal = selected.reduce((acc, item) => acc + safeInt(item.totalQty), 0);
+    if (selectedSummary) selectedSummary.textContent = `${selected.length} selecionado(s) • ${selectedTotal} caixas`;
+    if (confirmSelectedBtn) confirmSelectedBtn.disabled = selected.length === 0;
+    if (selectVisible) {
+      const visibleBoxes = pendingCheckboxes.filter((checkbox) => {
+        const row = checkbox.closest('tr');
+        return row && row.style.display !== 'none';
+      });
+      selectVisible.checked = visibleBoxes.length > 0 && visibleBoxes.every((checkbox) => checkbox.checked);
+      selectVisible.indeterminate = visibleBoxes.some((checkbox) => checkbox.checked) && !selectVisible.checked;
+    }
+  };
 
   const refreshPendingFilter = () => {
     const routeValue = routeFilter?.value || '';
@@ -12611,10 +12741,35 @@ function bindRetornosEvents() {
       const matchesSearch = !searchValue || normalizeText(row.dataset.search || '').includes(searchValue);
       row.style.display = matchesRoute && matchesDriver && matchesSearch ? '' : 'none';
     });
+    refreshBulkSelection();
   };
   routeFilter?.addEventListener('change', refreshPendingFilter);
   driverFilter?.addEventListener('change', refreshPendingFilter);
   searchFilter?.addEventListener('input', refreshPendingFilter);
+  pendingCheckboxes.forEach((checkbox) => checkbox.addEventListener('change', refreshBulkSelection));
+  selectVisible?.addEventListener('change', () => {
+    const shouldCheck = selectVisible.checked;
+    pendingCheckboxes.forEach((checkbox) => {
+      const row = checkbox.closest('tr');
+      if (row && row.style.display !== 'none') checkbox.checked = shouldCheck;
+    });
+    refreshBulkSelection();
+  });
+  confirmSelectedBtn?.addEventListener('click', async () => {
+    const items = getSelectedReturnItems();
+    if (!items.length) {
+      showToast('Selecione pelo menos uma pendência de retorno.', 'warn');
+      return;
+    }
+    const totalQty = items.reduce((acc, item) => acc + safeInt(item.totalQty), 0);
+    const ok = window.confirm(`Confirmar ${items.length} retorno(s) selecionado(s) no CD, totalizando ${totalQty} caixas?`);
+    if (!ok) return;
+    const result = await persistMutation('CONFIRM_CD_RETURN_BULK', {
+      items,
+      justification: bulkJustification?.value?.trim() || '',
+    }, 'Retornos selecionados confirmados no CD.');
+    if (result.ok) render();
+  });
   refreshPendingFilter();
 
   const refreshSummary = () => {
