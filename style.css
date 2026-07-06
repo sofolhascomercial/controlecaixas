@@ -1061,3 +1061,19 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
 .checkbox-title{display:flex; align-items:center; gap:10px}
 .divergence-row{position:relative}
 .divergence-row .muted{display:block; margin-top:6px}
+
+/* Inventário em massa */
+.bulk-inventory-card{overflow:hidden}
+.bulk-inventory-table-wrap{max-height:520px; overflow:auto}
+.bulk-inventory-table th{white-space:nowrap}
+.bulk-inventory-table td{vertical-align:middle}
+.bulk-inventory-table input[type="number"]{min-width:96px; padding:9px 10px; border-radius:10px}
+.bulk-inventory-table input[type="checkbox"]{width:18px; height:18px}
+.bulk-inventory-changed{background:#f6fff7}
+.bulk-inventory-diff strong{color:var(--green-900); white-space:nowrap}
+.checkbox-inline input{width:auto}
+@media (max-width: 720px){
+  .bulk-inventory-table-wrap{max-height:70vh}
+  .bulk-inventory-table{font-size:.82rem}
+  .bulk-inventory-table input[type="number"]{min-width:76px}
+}

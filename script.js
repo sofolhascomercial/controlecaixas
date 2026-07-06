@@ -4844,6 +4844,27 @@ function qtyToRows(qty) {
   return BOX_TYPES.map((item) => `<div class="kpi-row"><span>${item.label}</span><strong>${safeInt(qty?.[item.key])}</strong></div>`).join('');
 }
 
+function formatQtyCompact(qty) {
+  return BOX_TYPES.map((item) => `${item.key === 'folhagens' ? 'F' : 'B'}: ${safeInt(qty?.[item.key])}`).join(' | ');
+}
+
+function formatSignedQtyCompact(qty) {
+  return BOX_TYPES.map((item) => {
+    const value = signedInt(qty?.[item.key]);
+    return `${item.key === 'folhagens' ? 'F' : 'B'}: ${value > 0 ? '+' : ''}${value}`;
+  }).join(' | ');
+}
+
+function renderQtyChangeSummary(previousQty = emptyQty(), countedQty = emptyQty(), diffQty = null) {
+  const diff = diffQty || qtyDiff(countedQty, previousQty);
+  return BOX_TYPES.map((item) => {
+    const before = safeInt(previousQty?.[item.key]);
+    const after = safeInt(countedQty?.[item.key]);
+    const change = signedInt(diff?.[item.key]);
+    return `${item.key === 'folhagens' ? 'Folhagens' : 'Bandejas'}: ${before} → ${after} (${change > 0 ? '+' : ''}${change})`;
+  }).join('<br>');
+}
+
 function qtyInputs(prefix, values = emptyQty(), readonly = false) {
   return `
     <div class="qty-grid">
@@ -7044,7 +7065,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
 
     const location = payload.location === 'cd' ? 'cd' : 'store';
     const qty = sanitizeQty(payload.qty);
-    const date = todayStr();
+    const date = payload.date || todayStr();
     const notes = (payload.notes || '').trim();
 
     if (location === 'cd' && actor.role !== 'admin') {
@@ -7091,7 +7112,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     };
 
     state.movements.inventories.unshift(inventoryRecord);
-    state.movements.inventories = state.movements.inventories.slice(0, 300);
+    state.movements.inventories = state.movements.inventories.slice(0, 3000);
 
     if (location === 'store' && payload.storeId) {
       inventoryRecord.mandatoryInventoryIds = getPendingMandatoryInventoriesForStore(payload.storeId, date, state).map((schedule) => schedule.id);
@@ -7115,6 +7136,96 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     }
 
     audit('Inventário', hasDivergence ? 'Inventário com divergência' : 'Inventário sem divergência', `${location === 'cd' ? 'CD' : store?.name || 'Loja'} ajustado para ${sumQty(countedQty)} caixas.`);
+  }
+
+
+  if (type === 'APPLY_BULK_STORE_INVENTORY') {
+    if (actor.role !== 'admin') {
+      return { ok: false, error: 'Somente o ADM pode aplicar inventário em massa.' };
+    }
+
+    const date = payload.date || todayStr();
+    const notes = (payload.notes || '').trim();
+    const items = Array.isArray(payload.items) ? payload.items : [];
+
+    if (!items.length) {
+      return { ok: false, error: 'Nenhuma loja selecionada para inventário em massa.' };
+    }
+
+    if (notes.length < 4) {
+      return { ok: false, error: 'Informe o motivo do inventário em massa.' };
+    }
+
+    const batchId = randomId('inv_lote');
+    const applied = [];
+
+    items.forEach((entry) => {
+      const storeId = entry?.storeId;
+      const store = getStoreById(storeId, state);
+      if (!store || store.status === 'inactive') return;
+
+      const previousQty = getStoreStock(storeId, state);
+      const countedQty = sanitizeQty(entry.qty);
+      const diffQty = qtyDiff(countedQty, previousQty);
+      const hasDivergence = hasQtyDifference(previousQty, countedQty);
+
+      state.storeStocks[storeId] = countedQty;
+
+      const inventoryRecord = {
+        id: randomId('inv'),
+        batchId,
+        source: 'bulk_admin',
+        date,
+        location: 'store',
+        storeId,
+        previousQty,
+        countedQty,
+        diffQty,
+        hasDivergence,
+        notes,
+        createdBy: actor.name,
+        createdById: actor.id,
+        createdAt: nowIso(),
+      };
+
+      state.movements.inventories.unshift(inventoryRecord);
+
+      inventoryRecord.mandatoryInventoryIds = getPendingMandatoryInventoriesForStore(storeId, date, state).map((schedule) => schedule.id);
+      inventoryRecord.mandatoryInventoryId = inventoryRecord.mandatoryInventoryIds[0] || null;
+      markMandatoryInventoriesDoneForStore(storeId, date, state);
+
+      if (hasDivergence) {
+        const routeId = getEffectiveRoute(storeId, date, state);
+        openDivergence({
+          type: 'inventario_loja',
+          date,
+          routeId,
+          driverId: getEffectiveDriver(routeId, date, storeId, state),
+          storeId,
+          expectedQty: previousQty,
+          actualQty: countedQty,
+          differenceQty: diffQty,
+          inventoryId: inventoryRecord.id,
+          batchId,
+          justification: notes || 'Diferença identificada em inventário em massa realizado pelo ADM.',
+        });
+      }
+
+      applied.push({ store, previousQty, countedQty, diffQty, hasDivergence });
+    });
+
+    state.movements.inventories = state.movements.inventories.slice(0, 3000);
+
+    if (!applied.length) {
+      return { ok: false, error: 'Nenhuma loja válida encontrada para aplicar o inventário.' };
+    }
+
+    const changed = applied.filter((item) => item.hasDivergence).length;
+    audit('Inventário', 'Inventário em massa aplicado', `${applied.length} loja(s) inventariada(s) em ${formatDateBR(date)}. ${changed} com alteração de saldo. Motivo: ${notes}`);
+    applied.slice(0, 80).forEach((item) => {
+      if (!item.hasDivergence) return;
+      audit('Inventário', 'Correção por inventário em massa', `${item.store.name}: ${formatQtyCompact(item.previousQty)} → ${formatQtyCompact(item.countedQty)}. Diferença: ${formatSignedQtyCompact(item.diffQty)}. Motivo: ${notes}`);
+    });
   }
 
   if (type === 'CLOSE_DAY') {
@@ -10070,6 +10181,8 @@ function renderInventario() {
         </div>
       </div>
 
+      ${currentUser.role === 'admin' ? renderBulkStoreInventoryCard() : ''}
+
       <div class="grid-2">
         <div class="card">
           <div class="section-header">
@@ -10120,25 +10233,91 @@ function renderInventario() {
                   <th>Antes</th>
                   <th>Físico</th>
                   <th>Diferença</th>
+                  <th>Detalhe do que mudou</th>
                   <th>Usuário</th>
                 </tr>
               </thead>
               <tbody>
-                ${history.length ? history.slice(0, 12).map((item) => `
+                ${history.length ? history.slice(0, 20).map((item) => `
                   <tr>
                     <td>${formatDateBR(item.date)}</td>
                     <td>${item.location === 'cd' ? 'CD' : getStoreById(item.storeId)?.name || '-'}</td>
                     <td>${sumQty(item.previousQty)}</td>
                     <td><strong>${sumQty(item.countedQty)}</strong></td>
                     <td>${sumSignedQty(item.diffQty) > 0 ? '+' : ''}${sumSignedQty(item.diffQty)}</td>
+                    <td><small>${renderQtyChangeSummary(item.previousQty, item.countedQty, item.diffQty)}${item.batchId ? '<br><strong>Inventário em massa</strong>' : ''}${item.notes ? `<br>${escapeHtml(item.notes)}` : ''}</small></td>
                     <td>${item.createdBy || '-'}</td>
                   </tr>
-                `).join('') : `<tr><td colspan="6" class="center muted">Nenhum inventário lançado.</td></tr>`}
+                `).join('') : `<tr><td colspan="7" class="center muted">Nenhum inventário lançado.</td></tr>`}
               </tbody>
             </table>
           </div>
         </div>
       </div>
+    </div>
+  `;
+}
+
+
+function renderBulkStoreInventoryCard() {
+  if (currentUser.role !== 'admin') return '';
+  return `
+    <div class="card bulk-inventory-card">
+      <div class="page-header">
+        <div>
+          <h3>Inventário em massa por rede</h3>
+          <p class="muted">Selecione uma rede para carregar todas as lojas com o saldo atual. Ajuste manualmente apenas o que precisar corrigir.</p>
+        </div>
+        <div class="helper-card small">Histórico salvo com antes, depois, diferença, usuário e motivo.</div>
+      </div>
+      <form id="form-inventario-massa" class="stack">
+        <div class="form-grid-3">
+          <label>Data do inventário
+            <input type="text" class="locked-date-input" value="${formatDateBR(todayStr())}" readonly aria-readonly="true" />
+            <input type="hidden" name="date" value="${todayStr()}" />
+          </label>
+          <label>Rede
+            <select name="network" id="bulk-inventory-network">
+              <option value="">Todas as redes</option>
+              ${buildNetworkOptions()}
+            </select>
+          </label>
+          <label>Busca rápida
+            <input type="text" id="bulk-inventory-search" placeholder="Digite loja, rota ou rede" />
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" id="btn-bulk-inventory-load">Carregar lojas</button>
+          <button type="button" class="btn btn-ghost" id="btn-bulk-inventory-select-changed">Selecionar alteradas</button>
+          <button type="button" class="btn btn-ghost" id="btn-bulk-inventory-clear-selection">Limpar seleção</button>
+        </div>
+        <div id="bulk-inventory-summary" class="helper-card small">Selecione uma rede e clique em carregar lojas.</div>
+        <div class="table-wrap bulk-inventory-table-wrap">
+          <table class="bulk-inventory-table">
+            <thead>
+              <tr>
+                <th><input type="checkbox" id="bulk-inventory-select-all" title="Selecionar todas as lojas exibidas" /></th>
+                <th>Loja</th>
+                <th>Rede / rota</th>
+                <th>Atual folhagens</th>
+                <th>Atual bandejas</th>
+                <th>Corrigir folhagens</th>
+                <th>Corrigir bandejas</th>
+                <th>Diferença</th>
+              </tr>
+            </thead>
+            <tbody id="bulk-inventory-rows">
+              <tr><td colspan="8" class="center muted">Nenhuma loja carregada ainda.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <label>Observação / motivo do ajuste em massa
+          <textarea name="notes" required placeholder="Exemplo: inventário físico geral realizado pela equipe e regularizado pelo ADM."></textarea>
+        </label>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Aplicar inventário nas lojas selecionadas</button>
+        </div>
+      </form>
     </div>
   `;
 }
@@ -12941,6 +13120,158 @@ function bindInventarioEvents() {
         notes: formStore.notes.value.trim(),
       };
       const result = await persistMutation('APPLY_INVENTORY', payload, 'Inventário da loja aplicado com sucesso.');
+      if (result.ok) render();
+    });
+  }
+
+  const formBulkStore = document.getElementById('form-inventario-massa');
+  const bulkNetworkSelect = document.getElementById('bulk-inventory-network');
+  const bulkSearchInput = document.getElementById('bulk-inventory-search');
+  const bulkRows = document.getElementById('bulk-inventory-rows');
+  const bulkSummary = document.getElementById('bulk-inventory-summary');
+  const bulkSelectAll = document.getElementById('bulk-inventory-select-all');
+
+  const getBulkFilteredStores = () => {
+    const network = bulkNetworkSelect?.value || '';
+    const search = normalizeText(bulkSearchInput?.value || '');
+    return getActiveStores()
+      .filter((store) => !network || inferStoreNetwork(store) === network)
+      .filter((store) => {
+        if (!search) return true;
+        const route = getRouteById(getEffectiveRoute(store.id, todayStr()));
+        const haystack = normalizeText(`${store.name || ''} ${getStoreOptionLabel(store)} ${inferStoreNetwork(store)} ${route?.name || ''}`);
+        return haystack.includes(search);
+      })
+      .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+  };
+
+  const updateBulkRowDiff = (row) => {
+    if (!row) return;
+    const current = {
+      folhagens: safeInt(row.dataset.currentFolhagens),
+      bandejas: safeInt(row.dataset.currentBandejas),
+    };
+    const counted = {
+      folhagens: safeInt(row.querySelector('[data-box="folhagens"]')?.value),
+      bandejas: safeInt(row.querySelector('[data-box="bandejas"]')?.value),
+    };
+    const diff = qtyDiff(counted, current);
+    const changed = hasQtyDifference(current, counted);
+    row.dataset.changed = changed ? '1' : '0';
+    const diffCell = row.querySelector('.bulk-inventory-diff');
+    if (diffCell) {
+      diffCell.innerHTML = changed ? `<strong>${formatSignedQtyCompact(diff)}</strong>` : '<span class="muted">Sem alteração</span>';
+    }
+    if (changed) {
+      row.classList.add('bulk-inventory-changed');
+      const checkbox = row.querySelector('.bulk-inventory-check');
+      if (checkbox) checkbox.checked = true;
+    } else {
+      row.classList.remove('bulk-inventory-changed');
+    }
+  };
+
+  const refreshBulkSummary = () => {
+    if (!bulkSummary || !bulkRows) return;
+    const rows = [...bulkRows.querySelectorAll('.bulk-inventory-row')];
+    const selected = rows.filter((row) => row.querySelector('.bulk-inventory-check')?.checked).length;
+    const changed = rows.filter((row) => row.dataset.changed === '1').length;
+    bulkSummary.innerHTML = `Lojas carregadas: <strong>${rows.length}</strong> • Alteradas: <strong>${changed}</strong> • Selecionadas para aplicar: <strong>${selected}</strong>`;
+  };
+
+  const renderBulkInventoryRows = () => {
+    if (!bulkRows) return;
+    const stores = getBulkFilteredStores();
+    if (!stores.length) {
+      bulkRows.innerHTML = '<tr><td colspan="8" class="center muted">Nenhuma loja encontrada para o filtro selecionado.</td></tr>';
+      refreshBulkSummary();
+      return;
+    }
+    bulkRows.innerHTML = stores.map((store) => {
+      const qty = getStoreStock(store.id);
+      const route = getRouteById(getEffectiveRoute(store.id, todayStr()));
+      return `
+        <tr class="bulk-inventory-row" data-store-id="${store.id}" data-current-folhagens="${safeInt(qty.folhagens)}" data-current-bandejas="${safeInt(qty.bandejas)}" data-changed="0">
+          <td><input type="checkbox" class="bulk-inventory-check" /></td>
+          <td><strong>${escapeHtml(store.name)}</strong></td>
+          <td><small>${escapeHtml(inferStoreNetwork(store))}<br>${escapeHtml(route?.name || '-')}</small></td>
+          <td>${safeInt(qty.folhagens)}</td>
+          <td>${safeInt(qty.bandejas)}</td>
+          <td><input type="number" min="0" step="1" data-box="folhagens" value="${safeInt(qty.folhagens)}" /></td>
+          <td><input type="number" min="0" step="1" data-box="bandejas" value="${safeInt(qty.bandejas)}" /></td>
+          <td class="bulk-inventory-diff"><span class="muted">Sem alteração</span></td>
+        </tr>
+      `;
+    }).join('');
+    bulkRows.querySelectorAll('.bulk-inventory-row input[type="number"]').forEach((input) => {
+      input.addEventListener('input', () => {
+        updateBulkRowDiff(input.closest('.bulk-inventory-row'));
+        refreshBulkSummary();
+      });
+    });
+    bulkRows.querySelectorAll('.bulk-inventory-check').forEach((input) => {
+      input.addEventListener('change', refreshBulkSummary);
+    });
+    if (bulkSelectAll) bulkSelectAll.checked = false;
+    refreshBulkSummary();
+  };
+
+  if (formBulkStore) {
+    document.getElementById('btn-bulk-inventory-load')?.addEventListener('click', renderBulkInventoryRows);
+    bulkNetworkSelect?.addEventListener('change', renderBulkInventoryRows);
+    bulkSearchInput?.addEventListener('input', renderBulkInventoryRows);
+    bulkSelectAll?.addEventListener('change', () => {
+      bulkRows?.querySelectorAll('.bulk-inventory-check').forEach((checkbox) => {
+        checkbox.checked = bulkSelectAll.checked;
+      });
+      refreshBulkSummary();
+    });
+    document.getElementById('btn-bulk-inventory-select-changed')?.addEventListener('click', () => {
+      bulkRows?.querySelectorAll('.bulk-inventory-row').forEach((row) => {
+        const checkbox = row.querySelector('.bulk-inventory-check');
+        if (checkbox) checkbox.checked = row.dataset.changed === '1';
+      });
+      if (bulkSelectAll) bulkSelectAll.checked = false;
+      refreshBulkSummary();
+    });
+    document.getElementById('btn-bulk-inventory-clear-selection')?.addEventListener('click', () => {
+      bulkRows?.querySelectorAll('.bulk-inventory-check').forEach((checkbox) => {
+        checkbox.checked = false;
+      });
+      if (bulkSelectAll) bulkSelectAll.checked = false;
+      refreshBulkSummary();
+    });
+    renderBulkInventoryRows();
+    formBulkStore.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const rows = [...(bulkRows?.querySelectorAll('.bulk-inventory-row') || [])];
+      const selectedRows = rows.filter((row) => row.querySelector('.bulk-inventory-check')?.checked);
+      if (!selectedRows.length) {
+        showToast('Selecione pelo menos uma loja para aplicar o inventário.', 'error');
+        return;
+      }
+      const notes = formBulkStore.notes.value.trim();
+      if (notes.length < 4) {
+        showToast('Informe o motivo do inventário em massa.', 'error');
+        return;
+      }
+      const unchanged = selectedRows.filter((row) => row.dataset.changed !== '1').length;
+      if (unchanged && !window.confirm(`${unchanged} loja(s) selecionada(s) estão sem alteração de saldo. Deseja registrar mesmo assim?`)) {
+        return;
+      }
+      const items = selectedRows.map((row) => ({
+        storeId: row.dataset.storeId,
+        qty: {
+          folhagens: safeInt(row.querySelector('[data-box="folhagens"]')?.value),
+          bandejas: safeInt(row.querySelector('[data-box="bandejas"]')?.value),
+        },
+      }));
+      const result = await persistMutation('APPLY_BULK_STORE_INVENTORY', {
+        date: todayStr(),
+        network: bulkNetworkSelect?.value || '',
+        notes,
+        items,
+      }, 'Inventário em massa aplicado com sucesso.');
       if (result.ok) render();
     });
   }
