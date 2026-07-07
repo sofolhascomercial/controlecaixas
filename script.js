@@ -4137,7 +4137,7 @@ let currentUser = null;
 let passwordChangeUser = null;
 let currentView = 'dashboard';
 let backendMode = 'local';
-const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '' };
+const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '' };
 let firebaseDb = null;
 let firebaseRootRef = null;
 let unsubscribeFirebase = null;
@@ -6611,6 +6611,124 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
 
     recalculateOutboundDivergences(outbound, `Correção de saída do CD: ${reason}`);
     audit('Saídas do CD', 'Saída corrigida', `${actor.name} corrigiu ${getStoreById(outbound.storeId, state)?.name || '-'} de ${sumQty(oldQty)} para ${sumQty(newQty)} caixas. Motivo: ${reason}`);
+  }
+
+
+  if (type === 'UPDATE_OUTBOUND_DATE_EXPRESS') {
+    if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode corrigir data de lançamento.' };
+    const outbound = state.movements.outbounds.find((item) => item.id === payload.outboundId);
+    if (!outbound || !isActiveMovement(outbound) || outbound.status === 'historico') return { ok: false, error: 'Saída não encontrada para correção de data.' };
+    const newDate = String(payload.newDate || '').trim();
+    const reason = String(payload.reason || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) return { ok: false, error: 'Informe uma nova data válida.' };
+    if (reason.length < 6) return { ok: false, error: 'Informe o motivo da correção com pelo menos 6 caracteres.' };
+
+    const oldDate = outbound.date || todayStr();
+    if (oldDate === newDate) return { ok: false, error: 'A nova data é igual à data atual do lançamento.' };
+
+    const store = getStoreById(outbound.storeId, state);
+    if (!store) return { ok: false, error: 'Loja vinculada à saída não encontrada.' };
+
+    const duplicate = state.movements.outbounds.find((item) =>
+      item.id !== outbound.id
+      && isActiveMovement(item)
+      && item.status !== 'historico'
+      && item.storeId === outbound.storeId
+      && item.date === newDate
+    );
+    if (duplicate) {
+      return { ok: false, error: 'Já existe uma saída ativa para essa loja na nova data. Corrija ou estorne o lançamento duplicado antes de mudar a data.' };
+    }
+
+    const oldRouteId = outbound.routeId || '';
+    const oldDriverId = outbound.driverId || '';
+    const newRouteId = getEffectiveRoute(store.id, newDate, state);
+    if (!newRouteId) return { ok: false, error: 'A loja não possui rota cadastrada para a nova data.' };
+    const newDriverId = getEffectiveDriver(newRouteId, newDate, store.id, state);
+    if (!newDriverId) return { ok: false, error: 'A rota da nova data não possui motorista vinculado.' };
+
+    outbound.dateCorrections = Array.isArray(outbound.dateCorrections) ? outbound.dateCorrections : [];
+    outbound.dateCorrections.unshift({
+      id: randomId('datecorr'),
+      type: 'saida_cd_data',
+      previousDate: oldDate,
+      newDate,
+      previousRouteId: oldRouteId,
+      newRouteId,
+      previousDriverId: oldDriverId,
+      newDriverId,
+      reason,
+      correctedBy: actor.name,
+      correctedById: actor.id,
+      correctedAt: nowIso(),
+    });
+
+    outbound.date = newDate;
+    outbound.routeId = newRouteId;
+    outbound.driverId = newDriverId;
+    outbound.network = inferStoreNetwork(store);
+    outbound.separator = getStoreSeparator(store) || null;
+    outbound.cdLaunches = normalizeOutboundCdLaunches(outbound).map((launch) => ({
+      ...launch,
+      previousDate: launch.previousDate || oldDate,
+      date: newDate,
+    }));
+    outbound.updatedAt = nowIso();
+    outbound.updatedBy = actor.name;
+    outbound.updatedById = actor.id;
+    outbound.dateCorrectionReason = reason;
+
+    const linkedDeliveries = state.movements.driverDeliveries.filter((item) => isActiveMovement(item) && item.outboundId === outbound.id);
+    linkedDeliveries.forEach((delivery) => {
+      delivery.previousDate = delivery.previousDate || oldDate;
+      delivery.date = newDate;
+      delivery.routeId = newRouteId;
+      delivery.originalDriverId = delivery.originalDriverId || oldDriverId || outbound.driverId;
+      delivery.updatedAt = nowIso();
+      delivery.updatedBy = actor.name;
+      delivery.updatedById = actor.id;
+      delivery.dateCorrectionReason = reason;
+    });
+
+    const linkedReceipts = state.movements.receipts.filter((item) => isActiveMovement(item) && item.outboundId === outbound.id);
+    linkedReceipts.forEach((receipt) => {
+      receipt.previousDate = receipt.previousDate || oldDate;
+      receipt.date = newDate;
+      receipt.updatedAt = nowIso();
+      receipt.updatedBy = actor.name;
+      receipt.updatedById = actor.id;
+      receipt.dateCorrectionReason = reason;
+    });
+
+    const transfer = outbound.goianiaTransferId
+      ? state.movements.goianiaTransfers.find((item) => item.id === outbound.goianiaTransferId)
+      : null;
+    if (transfer && isActiveMovement(transfer)) {
+      transfer.previousDate = transfer.previousDate || oldDate;
+      transfer.date = newDate;
+      transfer.routeId = newRouteId;
+      transfer.updatedAt = nowIso();
+      transfer.updatedBy = actor.name;
+      transfer.updatedById = actor.id;
+      transfer.dateCorrectionReason = reason;
+    }
+
+    state.divergences.forEach((div) => {
+      const isLinked = div.outboundId === outbound.id || (!div.outboundId && div.storeId === outbound.storeId && div.date === oldDate);
+      if (!isLinked) return;
+      div.previousDate = div.previousDate || oldDate;
+      div.date = newDate;
+      div.routeId = div.routeId || newRouteId;
+      if (div.routeId === oldRouteId) div.routeId = newRouteId;
+      if (!div.driverId || div.driverId === oldDriverId) div.driverId = newDriverId;
+      div.updatedAt = nowIso();
+      div.updatedBy = actor.name;
+      div.updatedById = actor.id;
+      div.dateCorrectionReason = reason;
+    });
+
+    recalculateOutboundDivergences(outbound, `Correção expressa da data da saída: ${reason}`);
+    audit('Estornos e Correções', 'Data da saída corrigida', `${actor.name} alterou a data da saída de ${getStoreById(outbound.storeId, state)?.name || '-'} de ${formatDateBR(oldDate)} para ${formatDateBR(newDate)}. Motivo: ${reason}.`);
   }
 
   if (type === 'UPDATE_DRIVER_DELIVERY_QTY') {
@@ -11033,6 +11151,22 @@ function renderPendencias() {
 
 function renderEstornos() {
   if (currentUser.role !== 'admin') return `<div class="empty">Acesso restrito ao ADM.</div>`;
+  const expressNetwork = viewFilters.estornoExpressNetwork || '';
+  const expressSearch = normalizeText(viewFilters.estornoExpressSearch || '');
+  const networkOptions = getNetworkOptions();
+  const activeOutbounds = appState.movements.outbounds
+    .filter((item) => isActiveMovement(item) && item.status !== 'historico')
+    .filter((item) => {
+      const store = getStoreById(item.storeId);
+      const route = getRouteById(item.routeId);
+      const driver = getUserById(item.driverId);
+      const network = inferStoreNetwork(store || {});
+      const searchText = normalizeText(`${formatDateBR(item.date)} ${store?.name || ''} ${network} ${route?.name || ''} ${driver?.name || ''} ${sumQty(item.qty)} caixas`);
+      return (!expressNetwork || network === expressNetwork) && (!expressSearch || searchText.includes(expressSearch));
+    })
+    .sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''))
+    .slice(0, 180);
+
   const movements = [
     ...appState.movements.outbounds.map((item) => ({ type: 'outbound', item, date: item.date, storeId: item.storeId, routeId: item.routeId, total: sumQty(item.qty) })),
     ...appState.movements.driverDeliveries.map((item) => ({ type: 'driverDelivery', item, date: item.date, storeId: item.storeId, routeId: item.routeId, total: safeInt(item.totalDelivered) })),
@@ -11048,6 +11182,55 @@ function renderEstornos() {
 
   return `
     <div class="stack">
+      <div class="card">
+        <div class="page-header">
+          <div>
+            <h3>Edição expressa da data da saída</h3>
+            <p class="muted">Use quando o CD lançou a saída na data errada. A correção altera a data da entrega, recalcula rota/motorista pela nova data e registra tudo na auditoria.</p>
+          </div>
+          <span class="tag info">ADM</span>
+        </div>
+        <form id="form-express-outbound-date" class="stack">
+          <div class="form-grid">
+            <label>Filtrar por rede
+              <select name="network" id="express-date-network">
+                <option value="">Todas as redes</option>
+                ${networkOptions.map((network) => `<option value="${escapeHtml(network)}" ${network === expressNetwork ? 'selected' : ''}>${escapeHtml(network)}</option>`).join('')}
+              </select>
+            </label>
+            <label>Buscar saída
+              <input type="text" name="search" id="express-date-search" value="${escapeHtml(viewFilters.estornoExpressSearch || '')}" placeholder="Digite loja, rota, motorista ou data" />
+            </label>
+          </div>
+          <div class="form-grid">
+            <label>Saída lançada
+              <select name="outboundId" required>
+                <option value="">Selecione a saída para corrigir</option>
+                ${activeOutbounds.map((item) => {
+                  const store = getStoreById(item.storeId);
+                  const route = getRouteById(item.routeId);
+                  const driver = getUserById(item.driverId);
+                  return `<option value="${item.id}">${formatDateBR(item.date)} • ${escapeHtml(store?.name || 'Loja não encontrada')} • ${escapeHtml(route?.name || 'Sem rota')} • ${escapeHtml(driver?.name || 'Sem motorista')} • ${sumQty(item.qty)} caixas</option>`;
+                }).join('')}
+              </select>
+            </label>
+            <label>Nova data da entrega
+              <input type="date" name="newDate" value="${todayStr()}" required />
+            </label>
+          </div>
+          <label>Motivo da correção
+            <textarea name="reason" required placeholder="Ex.: lançamento feito após meia-noite e a entrega correta era no dia anterior."></textarea>
+          </label>
+          <div class="helper-card compact small">
+            Essa ação não apaga o lançamento. Ela grava o histórico com data anterior, nova data, usuário que corrigiu e motivo. Se já existir outra saída ativa da mesma loja na nova data, o sistema bloqueia para evitar duplicidade.
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Alterar data da saída</button>
+            <span class="muted">Mostrando até ${activeOutbounds.length} saídas conforme os filtros.</span>
+          </div>
+        </form>
+      </div>
+
       <div class="card">
         <div class="page-header">
           <div>
@@ -11076,7 +11259,6 @@ function renderEstornos() {
     </div>
   `;
 }
-
 
 function getRouteStoreGroups(routeId) {
   const normalStores = appState.stores
@@ -12263,6 +12445,39 @@ function bindFechamentoEvents() {
 }
 
 function bindEstornosEvents() {
+  const expressForm = document.getElementById('form-express-outbound-date');
+  const networkFilter = document.getElementById('express-date-network');
+  const searchFilter = document.getElementById('express-date-search');
+
+  const refreshExpressDateFilters = () => {
+    viewFilters.estornoExpressNetwork = networkFilter?.value || '';
+    viewFilters.estornoExpressSearch = searchFilter?.value || '';
+    render();
+  };
+
+  networkFilter?.addEventListener('change', refreshExpressDateFilters);
+  searchFilter?.addEventListener('change', refreshExpressDateFilters);
+  searchFilter?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      refreshExpressDateFilters();
+    }
+  });
+
+  expressForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+      outboundId: expressForm.outboundId?.value || '',
+      newDate: expressForm.newDate?.value || '',
+      reason: expressForm.reason?.value || '',
+    };
+    const result = await persistMutation('UPDATE_OUTBOUND_DATE_EXPRESS', payload, 'Data da saída corrigida com auditoria.');
+    if (result.ok) {
+      viewFilters.estornoExpressSearch = '';
+      render();
+    }
+  });
+
   document.querySelectorAll('.btn-cancel-movement').forEach((button) => {
     button.addEventListener('click', async () => {
       const reason = window.prompt('Informe o motivo do estorno. Esse motivo ficará na auditoria:');
