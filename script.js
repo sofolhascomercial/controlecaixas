@@ -5375,6 +5375,11 @@ function uniqueNetworks(state = appState) {
   return [...new Set(getActiveStores(state).map((store) => inferStoreNetwork(store)))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
 }
 
+
+function getNetworkOptions(state = appState) {
+  return uniqueNetworks(state).filter(Boolean);
+}
+
 function slugId(value) {
   return normalizeText(value).replace(/\s+/g, '_').replace(/^_+|_+$/g, '') || Math.random().toString(36).slice(2, 8);
 }
