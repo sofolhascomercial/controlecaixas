@@ -4143,6 +4143,9 @@ let firebaseRootRef = null;
 let unsubscribeFirebase = null;
 let dynamicCountsCache = { key: '', value: null };
 let renderQueued = false;
+let renderInProgress = false;
+let renderAgainAfterFinish = false;
+let lastRenderError = null;
 
 function invalidateUiCaches() {
   dynamicCountsCache = { key: '', value: null };
@@ -4151,10 +4154,42 @@ function invalidateUiCaches() {
 function scheduleRender() {
   if (renderQueued) return;
   renderQueued = true;
-  window.requestAnimationFrame(() => {
+  const runner = () => {
     renderQueued = false;
     render();
-  });
+  };
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(runner);
+  } else {
+    setTimeout(runner, 0);
+  }
+}
+
+function showViewLoading(viewKey = currentView) {
+  const meta = VIEW_META[viewKey] || VIEW_META.dashboard;
+  if (els.pageTitle) els.pageTitle.textContent = meta.title;
+  if (els.pageSubtitle) els.pageSubtitle.textContent = meta.subtitle;
+  if (els.mainContent) {
+    els.mainContent.innerHTML = `
+      <div class="card">
+        <h3>Carregando ${escapeHtml(meta.title || 'área')}...</h3>
+        <p class="muted">Aguarde um instante. O sistema está organizando as informações desta área.</p>
+      </div>
+    `;
+  }
+}
+
+function navigateToView(viewKey) {
+  if (!viewKey || !currentUser || !canAccessView(viewKey, currentUser)) return;
+  currentView = viewKey;
+  if (els.sidebar) els.sidebar.classList.remove('open');
+  if (els.sidebarNav) {
+    els.sidebarNav.querySelectorAll('[data-view]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.view === currentView);
+    });
+  }
+  showViewLoading(viewKey);
+  setTimeout(() => scheduleRender(), 0);
 }
 
 const els = {
@@ -7760,45 +7795,78 @@ function bindReliefDriverRouteEvents() {
 }
 
 function render() {
-  if (!currentUser) {
-    els.loginScreen.classList.remove('hidden');
-    els.appShell.classList.add('hidden');
-    renderLoginState();
+  if (renderInProgress) {
+    renderAgainAfterFinish = true;
     return;
   }
 
-  if (mustChangePassword(currentUser)) {
-    passwordChangeUser = currentUser;
-    currentUser = null;
-    sessionStorage.removeItem(SESSION_KEY);
-    render();
-    return;
+  renderInProgress = true;
+  try {
+    if (!currentUser) {
+      els.loginScreen.classList.remove('hidden');
+      els.appShell.classList.add('hidden');
+      renderLoginState();
+      return;
+    }
+
+    if (mustChangePassword(currentUser)) {
+      passwordChangeUser = currentUser;
+      currentUser = null;
+      sessionStorage.removeItem(SESSION_KEY);
+      render();
+      return;
+    }
+
+    if (!canAccessView(currentView, currentUser)) {
+      currentView = getFirstAllowedView(currentUser);
+    }
+
+    els.loginScreen.classList.add('hidden');
+    els.appShell.classList.remove('hidden');
+    els.todayLabel.textContent = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+    els.sidebarUserName.textContent = currentUser.name;
+    els.sidebarUserRole.textContent = ROLE_LABELS[currentUser.role];
+    els.topbarUserName.textContent = currentUser.name;
+    els.topbarUserRole.textContent = ROLE_LABELS[currentUser.role];
+
+    renderSidebar();
+    renderMobileQuickNav();
+
+    if (needsReliefDriverRouteSelection(currentUser)) {
+      els.pageTitle.textContent = 'Selecionar rota do dia';
+      els.pageSubtitle.textContent = 'Motorista folguista precisa fixar a rota antes de usar o sistema';
+      els.mainContent.innerHTML = renderReliefDriverRouteSelection();
+      bindReliefDriverRouteEvents();
+      return;
+    }
+
+    renderCurrentView();
+    lastRenderError = null;
+  } catch (error) {
+    lastRenderError = error;
+    console.error('Erro ao renderizar a tela:', error);
+    if (els.mainContent) {
+      els.mainContent.innerHTML = `
+        <div class="card">
+          <h3>Não foi possível abrir esta área</h3>
+          <p class="muted">O sistema encontrou um erro nesta tela, mas a navegação continua funcionando. Atualize a página ou tente abrir outra aba.</p>
+          <div class="form-actions">
+            <button type="button" class="btn btn-secondary" id="btn-render-dashboard">Voltar para o Dashboard</button>
+            <button type="button" class="btn btn-ghost" id="btn-render-retry">Tentar novamente</button>
+          </div>
+        </div>
+      `;
+      document.getElementById('btn-render-dashboard')?.addEventListener('click', () => navigateToView('dashboard'));
+      document.getElementById('btn-render-retry')?.addEventListener('click', () => scheduleRender());
+    }
+    showToast('Erro ao abrir a área. A navegação foi protegida para não travar o sistema.', 'error');
+  } finally {
+    renderInProgress = false;
+    if (renderAgainAfterFinish) {
+      renderAgainAfterFinish = false;
+      scheduleRender();
+    }
   }
-
-  if (!canAccessView(currentView, currentUser)) {
-    currentView = getFirstAllowedView(currentUser);
-  }
-
-  els.loginScreen.classList.add('hidden');
-  els.appShell.classList.remove('hidden');
-  els.todayLabel.textContent = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
-  els.sidebarUserName.textContent = currentUser.name;
-  els.sidebarUserRole.textContent = ROLE_LABELS[currentUser.role];
-  els.topbarUserName.textContent = currentUser.name;
-  els.topbarUserRole.textContent = ROLE_LABELS[currentUser.role];
-
-  renderSidebar();
-  renderMobileQuickNav();
-
-  if (needsReliefDriverRouteSelection(currentUser)) {
-    els.pageTitle.textContent = 'Selecionar rota do dia';
-    els.pageSubtitle.textContent = 'Motorista folguista precisa fixar a rota antes de usar o sistema';
-    els.mainContent.innerHTML = renderReliefDriverRouteSelection();
-    bindReliefDriverRouteEvents();
-    return;
-  }
-
-  renderCurrentView();
 }
 
 function renderSidebar() {
@@ -7813,9 +7881,7 @@ function renderSidebar() {
 
   els.sidebarNav.querySelectorAll('[data-view]').forEach((button) => {
     button.addEventListener('click', () => {
-      currentView = button.dataset.view;
-      render();
-      els.sidebar.classList.remove('open');
+      navigateToView(button.dataset.view);
     });
   });
 }
@@ -7858,12 +7924,33 @@ function getDynamicCounts() {
     return dynamicCountsCache.value;
   }
 
-  const openDivergences = getVisibleDivergences(appState, currentUser).filter((div) => div.status === 'aberta').length;
-  const pendingCount = getVisiblePendenciesForCurrentUser(todayStr()).length;
-  const mandatoryCount = getPendingMandatoryInventoriesForUser(currentUser, todayStr(), appState).length;
+  let openDivergences = 0;
+  let pendingCount = 0;
+  let mandatoryCount = 0;
+  let alertCount = 0;
+  try {
+    openDivergences = getVisibleDivergences(appState, currentUser).filter((div) => div.status === 'aberta').length;
+  } catch (error) {
+    console.warn('Falha ao calcular divergências do menu:', error);
+  }
+  try {
+    pendingCount = getVisiblePendenciesForCurrentUser(todayStr()).length;
+  } catch (error) {
+    console.warn('Falha ao calcular pendências do menu:', error);
+  }
+  try {
+    mandatoryCount = getPendingMandatoryInventoriesForUser(currentUser, todayStr(), appState).length;
+  } catch (error) {
+    console.warn('Falha ao calcular inventários do menu:', error);
+  }
+  try {
+    alertCount = getFastAlertCount(appState, currentUser);
+  } catch (error) {
+    console.warn('Falha ao calcular alertas do menu:', error);
+  }
   const counts = {
     divergencias: openDivergences,
-    alertas: getFastAlertCount(appState, currentUser) + mandatoryCount,
+    alertas: alertCount + mandatoryCount,
     pendencias: pendingCount,
     inventario: mandatoryCount,
   };
@@ -12404,10 +12491,7 @@ function renderConfiguracoes() {
 
 function bindViewEvents() {
   document.querySelectorAll('.btn-go-inventory').forEach((button) => {
-    button.addEventListener('click', () => {
-      currentView = 'inventario';
-      render();
-    });
+    button.addEventListener('click', () => navigateToView('inventario'));
   });
   if (currentView === 'saidas') bindSaidasEvents();
   if (currentView === 'resumoEnvios') bindResumoEnviosEvents();
@@ -12452,7 +12536,7 @@ function bindEstornosEvents() {
   const refreshExpressDateFilters = () => {
     viewFilters.estornoExpressNetwork = networkFilter?.value || '';
     viewFilters.estornoExpressSearch = searchFilter?.value || '';
-    render();
+    scheduleRender();
   };
 
   networkFilter?.addEventListener('change', refreshExpressDateFilters);
@@ -12500,7 +12584,7 @@ function bindResumoEnviosEvents() {
     viewFilters.resumoEnviosDate = form.date?.value || todayStr();
     viewFilters.resumoEnviosNetwork = form.network?.value || '';
     viewFilters.resumoEnviosCdUserId = form.cdUserId?.value || '';
-    render();
+    scheduleRender();
   });
 }
 
