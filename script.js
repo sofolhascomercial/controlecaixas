@@ -4048,6 +4048,7 @@ const ROUTE_DATASET = {
 
 const VIEW_META = {
   dashboard: { title: 'Dashboard', subtitle: 'Visão geral da operação em tempo real' },
+  baseEntregas: { title: 'Base de Entregas', subtitle: 'Importação de planilhas para definir lojas previstas do dia' },
   saidas: { title: 'Saídas do CD', subtitle: 'Lançamento de caixas enviadas por loja e rota' },
   resumoEnvios: { title: 'Resumo de Envios', subtitle: 'Resumo das caixas lançadas pelo CD para as lojas' },
   entregasMotorista: { title: 'Entrega do Motorista', subtitle: 'Validação do total deixado na loja pelo motorista' },
@@ -4074,6 +4075,7 @@ const VIEW_META = {
 
 const NAV_ITEMS = [
   { key: 'dashboard', label: 'Dashboard', roles: ['admin', 'cd', 'driver', 'promoter', 'viewer'] },
+  { key: 'baseEntregas', label: 'Base de Entregas', roles: ['admin', 'cd'] },
   { key: 'saidas', label: 'Saídas do CD', roles: ['admin', 'cd'] },
   { key: 'resumoEnvios', label: 'Resumo de Envios', roles: ['admin', 'cd'] },
   { key: 'entregasMotorista', label: 'Entrega do Motorista', roles: ['admin', 'driver'] },
@@ -4100,7 +4102,7 @@ const NAV_ITEMS = [
 
 const MOBILE_PRIORITY_BY_ROLE = {
   admin: ['dashboard', 'pendencias', 'fechamento', 'divergencias'],
-  cd: ['dashboard', 'saidas', 'resumoEnvios', 'retornos'],
+  cd: ['dashboard', 'baseEntregas', 'saidas', 'retornos'],
   driver: ['dashboard', 'entregasMotorista', 'recolhimentos', 'caixasOcupadas'],
   promoter: ['dashboard', 'recebimentos', 'caixasLiberadas', 'pendencias'],
   viewer: ['dashboard', 'estoque', 'divergencias'],
@@ -4108,6 +4110,7 @@ const MOBILE_PRIORITY_BY_ROLE = {
 
 const MOBILE_ICON_BY_VIEW = {
   dashboard: '🏠',
+  baseEntregas: '📥',
   saidas: '📦',
   resumoEnvios: '📋',
   entregasMotorista: '🚚',
@@ -4135,6 +4138,16 @@ const MOBILE_ICON_BY_VIEW = {
 let appState = null;
 let currentUser = null;
 let passwordChangeUser = null;
+let publicDashboardMode = false;
+const PUBLIC_DASHBOARD_USER = {
+  id: 'public_dashboard',
+  name: 'Dashboard Público',
+  username: 'dashboard',
+  role: 'viewer',
+  allowedViews: ['dashboard'],
+  forcePasswordChange: false,
+  isPublicDashboard: true,
+};
 let currentView = 'dashboard';
 let backendMode = 'local';
 const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '' };
@@ -4203,6 +4216,7 @@ const els = {
   firstConfirmPassword: document.getElementById('first-confirm-password'),
   loginUsername: document.getElementById('login-username'),
   loginPassword: document.getElementById('login-password'),
+  publicDashboardBtn: document.getElementById('public-dashboard-btn'),
   sidebarNav: document.getElementById('sidebar-nav'),
   sidebar: document.getElementById('sidebar'),
   sidebarUserName: document.getElementById('sidebar-user-name'),
@@ -4231,6 +4245,7 @@ async function init() {
 
 function bindBaseEvents() {
   els.loginForm.addEventListener('submit', handleLogin);
+  els.publicDashboardBtn?.addEventListener('click', startPublicDashboardAccess);
   els.firstPasswordForm?.addEventListener('submit', handleFirstPasswordChange);
   els.logoutBtn.addEventListener('click', logout);
   els.menuToggle.addEventListener('click', () => {
@@ -5258,6 +5273,7 @@ function mustChangePassword(user) {
 }
 
 function canAccessView(viewKey, user = currentUser) {
+  if (publicDashboardMode || user?.isPublicDashboard) return viewKey === 'dashboard';
   const item = NAV_ITEMS.find((nav) => nav.key === viewKey);
   if (!item || !user || !item.roles.includes(user.role)) return false;
   if (viewKey === 'cargaGoiania' && user.role === 'driver' && !isGoianiaTrunkUser(user)) return false;
@@ -5267,6 +5283,7 @@ function canAccessView(viewKey, user = currentUser) {
 }
 
 function getFirstAllowedView(user = currentUser) {
+  if (publicDashboardMode || user?.isPublicDashboard) return 'dashboard';
   return NAV_ITEMS.find((item) => canAccessView(item.key, user))?.key || 'dashboard';
 }
 
@@ -5550,6 +5567,174 @@ function getNetworkOptions(state = appState) {
   return uniqueNetworks(state).filter(Boolean);
 }
 
+
+function getStoreOptionLabel(store) {
+  if (!store) return '-';
+  const network = inferStoreNetwork(store);
+  const route = getRouteById(store.routeId || getEffectiveRoute(store.id, todayStr()), appState);
+  const name = formatStoreNameForUser(store.name || '-');
+  const parts = [name];
+  if (network && network !== 'Sem rede' && !normalizeText(name).includes(normalizeText(network))) parts.push(network);
+  if (route?.name) parts.push(route.name);
+  return parts.filter(Boolean).join(' • ');
+}
+
+function parseYmdFromAny(value, fallbackDate = todayStr()) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return formatDateForInput(value);
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    // Excel serial date. Day 1 = 1900-01-01, with Excel's historical leap-year bug handled by this common offset.
+    const utcDays = Math.floor(value - 25569);
+    const date = new Date(utcDays * 86400 * 1000);
+    if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return fallbackDate;
+  const ymd = raw.match(/(20\d{2})[-\/]([01]?\d)[-\/]([0-3]?\d)/);
+  if (ymd) return `${ymd[1]}-${String(ymd[2]).padStart(2, '0')}-${String(ymd[3]).padStart(2, '0')}`;
+  const dmy = raw.match(/([0-3]?\d)[\/\-]([01]?\d)[\/\-](20\d{2})/);
+  if (dmy) return `${dmy[3]}-${String(dmy[2]).padStart(2, '0')}-${String(dmy[1]).padStart(2, '0')}`;
+  return fallbackDate;
+}
+
+function cleanDeliveryPlanClientName(value) {
+  let raw = String(value || '').trim();
+  raw = raw.replace(/^\s*\d+\s*[-–]\s*/, '');
+  raw = raw.replace(/\s+/g, ' ').trim();
+  return raw;
+}
+
+function normalizeDeliveryPlanClientName(value) {
+  let normalized = normalizeText(cleanDeliveryPlanClientName(value));
+  const removePhrases = [
+    'sdb comercio de alimentos ltda',
+    'sdb comercio de alimentos',
+    'supermercado',
+    'supermercados',
+    'comercio de alimentos ltda',
+    'comercio de alimentos',
+    'alimentos ltda',
+    'ltda',
+    'sa',
+  ];
+  removePhrases.forEach((phrase) => {
+    normalized = normalized.replace(new RegExp(`(^| )${phrase.replace(/ /g, ' ')}( |$)`, 'g'), ' ');
+  });
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+  normalized = normalized.replace(/^atacadao dia a dia /, 'dia a dia ');
+  normalized = normalized.replace(/^dd /, 'dia a dia ');
+  normalized = normalized.replace(/^dia dia /, 'dia a dia ');
+  return normalized;
+}
+
+function getDeliveryPlanStoreTokens(store) {
+  const network = inferStoreNetwork(store);
+  const unit = getStoreUnitName(store);
+  return [...new Set([
+    store?.name || '',
+    formatStoreNameForUser(store?.name || ''),
+    normalizeStoreLinkName(store?.name || ''),
+    `${network} ${unit}`,
+    `${network} ${formatStoreNameForUser(store?.name || '')}`,
+    unit,
+  ].map(normalizeDeliveryPlanClientName).filter((token) => token && token.length >= 3))]
+    .sort((a, b) => b.length - a.length);
+}
+
+function findStoreForDeliveryPlanClient(rawName, state = appState) {
+  const normalized = normalizeDeliveryPlanClientName(rawName);
+  if (!normalized) return null;
+  const stores = getActiveStores(state);
+  let best = null;
+  let bestScore = 0;
+  stores.forEach((store) => {
+    const tokens = getDeliveryPlanStoreTokens(store);
+    tokens.forEach((token) => {
+      let score = 0;
+      if (normalized === token) score = 1000 + token.length;
+      else if (normalized.includes(token)) score = 700 + token.length;
+      else if (token.includes(normalized) && normalized.length >= 6) score = 500 + normalized.length;
+      if (score > bestScore) {
+        bestScore = score;
+        best = store;
+      }
+    });
+  });
+  return bestScore >= 500 ? best : null;
+}
+
+function getActiveDeliveryPlanImports(date = todayStr(), state = appState) {
+  return (state.deliveryPlanImports || [])
+    .filter((item) => !item.detailsArchived && item.date === date)
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+function getDeliveryPlanConsolidated(date = todayStr(), state = appState) {
+  const imports = getActiveDeliveryPlanImports(date, state);
+  const storeIds = new Set();
+  const unmatched = new Set();
+  let totalRows = 0;
+  let validRows = 0;
+  let duplicateCount = 0;
+  imports.forEach((item) => {
+    totalRows += safeInt(item.totalRows);
+    validRows += safeInt(item.validRows);
+    duplicateCount += safeInt(item.duplicateCount);
+    (item.matchedStoreIds || []).forEach((id) => id && storeIds.add(id));
+    (item.unmatchedNames || []).forEach((name) => name && unmatched.add(name));
+  });
+  return {
+    date,
+    imports,
+    hasActiveImports: imports.length > 0,
+    storeIds,
+    unmatchedNames: [...unmatched].sort((a, b) => a.localeCompare(b, 'pt-BR')),
+    totalRows,
+    validRows,
+    duplicateCount,
+  };
+}
+
+function buildDeliveryPlanImportPayload({ date, fileName, rows }, state = appState) {
+  const uniqueRawMap = new Map();
+  const records = [];
+  let validRows = 0;
+  rows.forEach((row) => {
+    const rawClient = cleanDeliveryPlanClientName(row.client);
+    const rowDate = parseYmdFromAny(row.date, date);
+    if (!rawClient || rowDate !== date) return;
+    validRows += 1;
+    const normalizedName = normalizeDeliveryPlanClientName(rawClient);
+    if (!uniqueRawMap.has(normalizedName)) uniqueRawMap.set(normalizedName, rawClient);
+  });
+
+  const matchedStoreIds = new Set();
+  const unmatchedNames = [];
+  uniqueRawMap.forEach((rawName, normalizedName) => {
+    const store = findStoreForDeliveryPlanClient(rawName, state);
+    if (store) {
+      matchedStoreIds.add(store.id);
+      records.push({ rawName, normalizedName, storeId: store.id, storeName: store.name });
+    } else {
+      unmatchedNames.push(rawName);
+      records.push({ rawName, normalizedName, storeId: null, storeName: null });
+    }
+  });
+
+  return {
+    date,
+    fileName,
+    totalRows: rows.length,
+    validRows,
+    uniqueRawStores: uniqueRawMap.size,
+    matchedCount: matchedStoreIds.size,
+    unmatchedCount: unmatchedNames.length,
+    duplicateCount: Math.max(0, validRows - uniqueRawMap.size),
+    matchedStoreIds: [...matchedStoreIds],
+    unmatchedNames: unmatchedNames.slice(0, 200),
+    records: records.slice(0, 600),
+  };
+}
+
 function slugId(value) {
   return normalizeText(value).replace(/\s+/g, '_').replace(/^_+|_+$/g, '') || Math.random().toString(36).slice(2, 8);
 }
@@ -5583,6 +5768,7 @@ function ensureStateShape(state) {
   base.movements.occupiedBoxes = Array.isArray(base.movements.occupiedBoxes) ? base.movements.occupiedBoxes : [];
   base.movements.releasedBoxes = Array.isArray(base.movements.releasedBoxes) ? base.movements.releasedBoxes : [];
   base.reliefDriverAssignments = Array.isArray(base.reliefDriverAssignments) ? base.reliefDriverAssignments : [];
+  base.deliveryPlanImports = Array.isArray(base.deliveryPlanImports) ? base.deliveryPlanImports : [];
 
   base.movements.outbounds = base.movements.outbounds.map((item) => ({
     ...item,
@@ -5650,6 +5836,31 @@ function ensureStateShape(state) {
     userId: item.userId || '',
     selectedAt: item.selectedAt || item.createdAt || nowIso(),
   }));
+
+  base.deliveryPlanImports = base.deliveryPlanImports.map((item) => ({
+    ...item,
+    id: item.id || randomId('plan'),
+    date: item.date || todayStr(),
+    fileName: item.fileName || item.filename || 'planilha.xlsx',
+    createdAt: item.createdAt || nowIso(),
+    createdBy: item.createdBy || 'Sistema',
+    createdById: item.createdById || '',
+    totalRows: safeInt(item.totalRows),
+    validRows: safeInt(item.validRows),
+    uniqueRawStores: safeInt(item.uniqueRawStores),
+    matchedCount: safeInt(item.matchedCount),
+    unmatchedCount: safeInt(item.unmatchedCount),
+    duplicateCount: safeInt(item.duplicateCount),
+    detailsArchived: !!item.detailsArchived,
+    matchedStoreIds: Array.isArray(item.matchedStoreIds) && !item.detailsArchived ? [...new Set(item.matchedStoreIds.filter(Boolean))] : [],
+    unmatchedNames: Array.isArray(item.unmatchedNames) && !item.detailsArchived ? [...new Set(item.unmatchedNames.filter(Boolean))].slice(0, 200) : [],
+    records: Array.isArray(item.records) && !item.detailsArchived ? item.records.slice(0, 600).map((row) => ({
+      rawName: String(row.rawName || ''),
+      normalizedName: String(row.normalizedName || normalizeText(row.rawName || '')),
+      storeId: row.storeId || null,
+      storeName: row.storeName || null,
+    })) : [],
+  })).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 
   base.divergences = Array.isArray(base.divergences) ? base.divergences : [];
   base.audit = Array.isArray(base.audit) ? base.audit : [];
@@ -7803,6 +8014,51 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     });
   }
 
+
+  if (type === 'IMPORT_DELIVERY_PLAN') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Apenas ADM ou CD podem importar a base de entregas.' };
+    const date = payload.date || todayStr();
+    const fileName = String(payload.fileName || 'planilha.xlsx').slice(0, 120);
+    const importData = payload.importData || {};
+    const newImport = {
+      id: randomId('plan'),
+      date,
+      fileName,
+      createdAt: nowIso(),
+      createdBy: actor.name,
+      createdById: actor.id,
+      totalRows: safeInt(importData.totalRows),
+      validRows: safeInt(importData.validRows),
+      uniqueRawStores: safeInt(importData.uniqueRawStores),
+      matchedCount: safeInt(importData.matchedCount),
+      unmatchedCount: safeInt(importData.unmatchedCount),
+      duplicateCount: safeInt(importData.duplicateCount),
+      matchedStoreIds: Array.isArray(importData.matchedStoreIds) ? [...new Set(importData.matchedStoreIds.filter(Boolean))] : [],
+      unmatchedNames: Array.isArray(importData.unmatchedNames) ? [...new Set(importData.unmatchedNames.filter(Boolean))].slice(0, 200) : [],
+      records: Array.isArray(importData.records) ? importData.records.slice(0, 600) : [],
+      detailsArchived: false,
+    };
+    state.deliveryPlanImports.unshift(newImport);
+    state.deliveryPlanImports = state.deliveryPlanImports
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+      .map((item, index) => {
+        if (index < 2) return { ...item, detailsArchived: false };
+        if (item.detailsArchived) return { ...item, matchedStoreIds: [], unmatchedNames: [], records: [] };
+        return {
+          ...item,
+          detailsArchived: true,
+          archivedAt: nowIso(),
+          matchedStoreIds: [],
+          unmatchedNames: [],
+          records: [],
+        };
+      })
+      .slice(0, 20);
+    audit('Base de Entregas', 'Planilha importada', `${fileName}: ${newImport.totalRows} registros, ${newImport.uniqueRawStores} lojas únicas, ${newImport.matchedCount} reconhecidas, ${newImport.unmatchedCount} não reconhecidas. Mantidas no máximo 2 planilhas ativas.`);
+    state.lastUpdatedAt = nowIso();
+    return { ok: true, state };
+  }
+
   if (type === 'CLOSE_DAY') {
     if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode fechar o dia.' };
     const date = payload.date || todayStr();
@@ -7935,6 +8191,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
 function renderLoginState() {
   const changingPassword = !!passwordChangeUser;
   els.loginForm.classList.toggle('hidden', changingPassword);
+  els.publicDashboardBtn?.classList.toggle('hidden', changingPassword);
   els.passwordChangePanel?.classList.toggle('hidden', !changingPassword);
   if (changingPassword && els.passwordChangeUserName) {
     els.passwordChangeUserName.textContent = `${passwordChangeUser.name} (${passwordChangeUser.username})`;
@@ -7947,6 +8204,7 @@ function clearPasswordChangeForm() {
 }
 
 function restoreSession() {
+  publicDashboardMode = false;
   const session = sessionStorage.getItem(SESSION_KEY);
   if (!session) return;
   const data = JSON.parse(session);
@@ -7965,6 +8223,7 @@ function restoreSession() {
 
 function handleLogin(event) {
   event.preventDefault();
+  publicDashboardMode = false;
   const username = normalizeLoginValue(els.loginUsername.value);
   const password = els.loginPassword.value.trim();
   const user = appState.users.find((item) => normalizeLoginValue(item.username) === username && item.password === password);
@@ -7987,6 +8246,19 @@ function handleLogin(event) {
   currentView = getFirstAllowedView(currentUser);
   sessionStorage.setItem(SESSION_KEY, JSON.stringify({ userId: user.id }));
   showToast(`Bem-vindo, ${user.name.split(' ')[0]}!`);
+  render();
+}
+
+function startPublicDashboardAccess() {
+  publicDashboardMode = true;
+  passwordChangeUser = null;
+  currentUser = { ...PUBLIC_DASHBOARD_USER };
+  currentView = 'dashboard';
+  sessionStorage.removeItem(SESSION_KEY);
+  clearPasswordChangeForm();
+  if (els.loginUsername) els.loginUsername.value = '';
+  if (els.loginPassword) els.loginPassword.value = '';
+  showToast('Dashboard aberto em modo somente leitura.');
   render();
 }
 
@@ -8024,6 +8296,8 @@ async function handleFirstPasswordChange(event) {
 
 function logout() {
   sessionStorage.removeItem(SESSION_KEY);
+  publicDashboardMode = false;
+  document.body.classList.remove('public-dashboard-mode');
   currentUser = null;
   passwordChangeUser = null;
   els.sidebar.classList.remove('open');
@@ -8124,13 +8398,14 @@ function render() {
   renderInProgress = true;
   try {
     if (!currentUser) {
+      document.body.classList.remove('public-dashboard-mode');
       els.loginScreen.classList.remove('hidden');
       els.appShell.classList.add('hidden');
       renderLoginState();
       return;
     }
 
-    if (mustChangePassword(currentUser)) {
+    if (!publicDashboardMode && mustChangePassword(currentUser)) {
       passwordChangeUser = currentUser;
       currentUser = null;
       sessionStorage.removeItem(SESSION_KEY);
@@ -8144,16 +8419,17 @@ function render() {
 
     els.loginScreen.classList.add('hidden');
     els.appShell.classList.remove('hidden');
+    document.body.classList.toggle('public-dashboard-mode', !!publicDashboardMode);
     els.todayLabel.textContent = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
-    els.sidebarUserName.textContent = currentUser.name;
-    els.sidebarUserRole.textContent = ROLE_LABELS[currentUser.role];
-    els.topbarUserName.textContent = currentUser.name;
-    els.topbarUserRole.textContent = ROLE_LABELS[currentUser.role];
+    els.sidebarUserName.textContent = publicDashboardMode ? 'Dashboard Público' : currentUser.name;
+    els.sidebarUserRole.textContent = publicDashboardMode ? 'Somente leitura' : ROLE_LABELS[currentUser.role];
+    els.topbarUserName.textContent = publicDashboardMode ? 'Dashboard Público' : currentUser.name;
+    els.topbarUserRole.textContent = publicDashboardMode ? 'Somente leitura' : ROLE_LABELS[currentUser.role];
 
     renderSidebar();
     renderMobileQuickNav();
 
-    if (needsReliefDriverRouteSelection(currentUser)) {
+    if (!publicDashboardMode && needsReliefDriverRouteSelection(currentUser)) {
       els.pageTitle.textContent = 'Selecionar rota do dia';
       els.pageSubtitle.textContent = 'Motorista folguista precisa fixar a rota antes de usar o sistema';
       els.mainContent.innerHTML = renderReliefDriverRouteSelection();
@@ -8192,7 +8468,9 @@ function render() {
 
 function renderSidebar() {
   const counts = getDynamicCounts();
-  const allowed = NAV_ITEMS.filter((item) => canAccessView(item.key, currentUser));
+  const allowed = publicDashboardMode
+    ? NAV_ITEMS.filter((item) => item.key === 'dashboard')
+    : NAV_ITEMS.filter((item) => canAccessView(item.key, currentUser));
   els.sidebarNav.innerHTML = allowed.map((item) => `
     <button class="nav-link ${currentView === item.key ? 'active' : ''}" data-view="${item.key}">
       <span>${item.label}</span>
@@ -8228,6 +8506,7 @@ function getFastAlertCount(state = appState, user = currentUser) {
 }
 
 function getDynamicCounts() {
+  if (publicDashboardMode) return {};
   const key = [
     appState?.lastUpdatedAt || '',
     currentUser?.id || '',
@@ -8280,6 +8559,7 @@ function getDynamicCounts() {
 }
 
 function renderCurrentView() {
+  if (publicDashboardMode) currentView = 'dashboard';
   if (!canAccessView(currentView, currentUser)) {
     currentView = getFirstAllowedView(currentUser);
   }
@@ -8289,6 +8569,7 @@ function renderCurrentView() {
 
   const renderers = {
     dashboard: renderDashboard,
+    baseEntregas: renderBaseEntregas,
     saidas: renderSaidas,
     resumoEnvios: renderResumoEnvios,
     entregasMotorista: renderEntregasMotorista,
@@ -8616,6 +8897,128 @@ function getCdReturnPendingSummary(state = appState, user = currentUser) {
   const drivers = new Set(groups.map((group) => group.driverId).filter(Boolean)).size;
   const oldest = groups.length ? groups.reduce((min, group) => group.date < min ? group.date : min, groups[0].date) : '';
   return { groups, total, routes, drivers, oldest };
+}
+
+
+function getDashboardStoreProcessSummary(state = appState, user = currentUser, date = todayStr()) {
+  const scopeUser = user?.role === 'promoter' ? { role: 'viewer' } : user;
+  const globalScope = canSeeGlobalData(scopeUser) || scopeUser?.role === 'cd';
+  const visibleStores = globalScope ? getActiveStores(state) : getVisibleStores(state, scopeUser, date);
+  const visibleStoreIds = new Set(visibleStores.map((store) => store.id));
+  const isInScope = (item) => {
+    if (!item) return false;
+    if (!globalScope && item.storeId && !visibleStoreIds.has(item.storeId)) return false;
+    return globalScope || isMovementVisibleToUser(item, scopeUser, state);
+  };
+  const importedPlan = getDeliveryPlanConsolidated(date, state);
+  const expectedStoreIds = importedPlan.hasActiveImports
+    ? new Set([...importedPlan.storeIds].filter((storeId) => visibleStoreIds.has(storeId)))
+    : new Set(
+      visibleStores
+        .filter((store) => storeHasExpectedDeliveryOnDate(store, date))
+        .map((store) => store.id)
+    );
+  const cdStoreIds = new Set(
+    (state.movements?.outbounds || [])
+      .filter((item) => isActiveMovement(item) && item.status !== 'historico' && item.date === date && item.storeId && isInScope(item))
+      .map((item) => item.storeId)
+  );
+  const driverStoreIds = new Set(
+    (state.movements?.driverDeliveries || [])
+      .filter((item) => isActiveMovement(item) && item.date === date && item.storeId && isInScope(item))
+      .map((item) => item.storeId)
+  );
+  const promoterStoreIds = new Set(
+    (state.movements?.receipts || [])
+      .filter((item) => isActiveMovement(item) && item.date === date && item.storeId && isInScope(item))
+      .map((item) => item.storeId)
+  );
+  const expectedWithoutCd = [...expectedStoreIds].filter((storeId) => !cdStoreIds.has(storeId));
+  const cdWithoutDriver = [...cdStoreIds].filter((storeId) => storeRequiresDriver(getStoreById(storeId, state)) && !driverStoreIds.has(storeId));
+  const driverWithoutPromoter = [...driverStoreIds].filter((storeId) => storeRequiresPromoter(getStoreById(storeId, state)) && !promoterStoreIds.has(storeId));
+  const driverWithoutCd = [...driverStoreIds].filter((storeId) => !cdStoreIds.has(storeId));
+  const promoterWithoutDriver = [...promoterStoreIds].filter((storeId) => !driverStoreIds.has(storeId) && storeRequiresDriver(getStoreById(storeId, state)));
+  return {
+    date,
+    expectedStores: expectedStoreIds.size,
+    cdStores: cdStoreIds.size,
+    driverStores: driverStoreIds.size,
+    promoterStores: promoterStoreIds.size,
+    expectedSource: importedPlan.hasActiveImports ? 'planilha' : 'agenda',
+    importedPlanCount: importedPlan.imports.length,
+    unmatchedPlanNames: importedPlan.unmatchedNames,
+    expectedWithoutCd,
+    cdWithoutDriver,
+    driverWithoutPromoter,
+    driverWithoutCd,
+    promoterWithoutDriver,
+  };
+}
+
+function renderDashboardOperationSummary(summary) {
+  const expected = Math.max(0, safeInt(summary.expectedStores));
+  const percent = (value) => expected > 0 ? `${Math.round((safeInt(value) / expected) * 100)}% da previsão` : 'Sem previsão automática';
+  const lines = [
+    {
+      title: 'Previstas sem lançamento do CD',
+      value: summary.expectedWithoutCd.length,
+      text: `${summary.expectedWithoutCd.length} loja(s) tinham entrega prevista pela ${summary.expectedSource === 'planilha' ? 'planilha importada' : 'agenda'} e ainda não têm saída lançada pelo CD.`,
+      tone: summary.expectedWithoutCd.length ? 'danger' : 'ok',
+    },
+    {
+      title: 'CD lançou, motorista não validou',
+      value: summary.cdWithoutDriver.length,
+      text: `${summary.cdWithoutDriver.length} loja(s) foram lançadas pelo CD, mas ainda não foram confirmadas pelo motorista.`,
+      tone: summary.cdWithoutDriver.length ? 'danger' : 'ok',
+    },
+    {
+      title: 'Motorista validou, promotor não confirmou',
+      value: summary.driverWithoutPromoter.length,
+      text: `${summary.driverWithoutPromoter.length} loja(s) tiveram entrega validada pelo motorista, mas ainda não foram confirmadas pelo promotor/loja.`,
+      tone: summary.driverWithoutPromoter.length ? 'warn' : 'ok',
+    },
+    {
+      title: 'Motorista lançou sem saída do CD',
+      value: summary.driverWithoutCd.length,
+      text: `${summary.driverWithoutCd.length} loja(s) foram registradas pelo motorista sem lançamento prévio do CD.`,
+      tone: summary.driverWithoutCd.length ? 'warn' : 'ok',
+    },
+  ];
+  return `
+    <div class="stack">
+      <div class="section-header">
+        <div>
+          <h3>Resumo da operação de hoje</h3>
+          <p>Data operacional: ${formatDateBR(summary.date)}. Após 22h, o sistema já considera a entrega do dia seguinte.</p>
+        </div>
+      </div>
+      <div class="cards-grid">
+        ${renderMetricCard('Lojas previstas hoje', summary.expectedStores, '📌', summary.expectedStores ? 'success' : 'warning', summary.expectedSource === 'planilha' ? `Base importada (${summary.importedPlanCount} planilha(s) ativa(s))` : 'Conforme agenda de entrega por rede/loja')}
+        ${renderMetricCard('Lançadas pelo CD', summary.cdStores, '🏭', summary.cdStores >= summary.expectedStores && summary.expectedStores ? 'success' : 'warning', percent(summary.cdStores))}
+        ${renderMetricCard('Validadas pelo motorista', summary.driverStores, '🚚', summary.driverStores >= summary.cdStores && summary.cdStores ? 'success' : 'warning', 'Total de lojas com entrega confirmada')}
+        ${renderMetricCard('Confirmadas pelo promotor', summary.promoterStores, '🏬', summary.promoterStores >= summary.driverStores && summary.driverStores ? 'success' : 'warning', 'Total de lojas com recebimento confirmado')}
+      </div>
+      <div class="card">
+        <div class="section-header">
+          <div>
+            <h3>Onde está parado?</h3>
+            <p>Comparativo rápido entre agenda, CD, motorista e promotor.</p>
+          </div>
+        </div>
+        <div class="list">
+          ${lines.map((line) => `
+            <div class="list-item">
+              <div class="list-item-head">
+                <strong>${line.title}</strong>
+                ${statusTag(line.tone)}
+              </div>
+              <p>${line.text}</p>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function getTodayMetrics(state = appState, user = currentUser) {
@@ -9623,6 +10026,150 @@ function getLossAndStoppedRows(state = appState) {
   }).filter((row) => row.total > 0 || row.openDivs > 0).sort((a, b) => b.riskScore - a.riskScore);
 }
 
+
+function renderBaseEntregas() {
+  const date = todayStr();
+  const consolidated = getDeliveryPlanConsolidated(date, appState);
+  const activeImports = getActiveDeliveryPlanImports(date, appState);
+  const historical = (appState.deliveryPlanImports || [])
+    .filter((item) => item.detailsArchived || item.date !== date)
+    .slice()
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .slice(0, 8);
+  const matchedStores = [...consolidated.storeIds]
+    .map((id) => getStoreById(id, appState))
+    .filter(Boolean)
+    .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+
+  return `
+    <div class="stack">
+      <div class="card">
+        <div class="section-header">
+          <div>
+            <h3>Importar base de entregas do dia</h3>
+            <p>Envie até 2 planilhas ativas. A terceira arquiva os detalhes da mais antiga e mantém apenas o resumo.</p>
+          </div>
+          <div class="tag info">Data operacional: ${formatDateBR(date)}</div>
+        </div>
+        <form id="form-import-delivery-plan" class="stack">
+          <div class="form-grid">
+            <label>Planilha Excel
+              <input type="file" name="file" accept=".xlsx,.xls" required />
+            </label>
+            <label>Data da base
+              <input type="text" class="locked-date-input" value="${formatDateBR(date)}" readonly aria-readonly="true" />
+              <input type="hidden" name="date" value="${date}" />
+            </label>
+          </div>
+          <div class="helper-card small">
+            O sistema lê as colunas <strong>Cliente</strong> e <strong>Data da venda</strong>, remove lojas repetidas e cria a base prevista do dia. A planilha não cria saída do CD automaticamente.
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Importar planilha</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="cards-grid">
+        ${renderMetricCard('Planilhas ativas', `${activeImports.length}/2`, '📎', activeImports.length ? 'success' : 'warning', 'Limite de anexos detalhados')}
+        ${renderMetricCard('Lojas únicas previstas', consolidated.storeIds.size, '🏬', consolidated.storeIds.size ? 'success' : 'warning', 'Duplicadas contam uma vez')}
+        ${renderMetricCard('Registros lidos', consolidated.totalRows, '📄', 'success', 'Somando planilhas ativas')}
+        ${renderMetricCard('Não reconhecidas', consolidated.unmatchedNames.length, '⚠️', consolidated.unmatchedNames.length ? 'warning' : 'success', 'Precisam de conferência de cadastro')}
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="section-header">
+            <div>
+              <h3>Planilhas ativas</h3>
+              <p>Somente estas entram no resumo do Dashboard e nas pendências previstas.</p>
+            </div>
+          </div>
+          ${activeImports.length ? `
+            <div class="list">
+              ${activeImports.map((item) => `
+                <div class="list-item">
+                  <div class="list-item-head">
+                    <strong>${escapeHtml(item.fileName)}</strong>
+                    ${statusTag('ok')}
+                  </div>
+                  <p>${safeInt(item.matchedCount)} loja(s) reconhecida(s) • ${safeInt(item.unmatchedCount)} não reconhecida(s) • ${safeInt(item.duplicateCount)} repetição(ões) removida(s)</p>
+                  <small class="muted">Importada por ${escapeHtml(item.createdBy || '-')} em ${formatDateTimeBR(item.createdAt)}</small>
+                </div>
+              `).join('')}
+            </div>
+          ` : `<div class="empty">Nenhuma planilha ativa para a data operacional atual. O Dashboard usará a agenda automática.</div>`}
+        </div>
+
+        <div class="card">
+          <div class="section-header">
+            <div>
+              <h3>Histórico resumido</h3>
+              <p>Quando uma terceira planilha é anexada, a mais antiga fica aqui apenas com resumo.</p>
+            </div>
+          </div>
+          ${historical.length ? `
+            <div class="list">
+              ${historical.map((item) => `
+                <div class="list-item">
+                  <div class="list-item-head">
+                    <strong>${escapeHtml(item.fileName)}</strong>
+                    <span class="tag ${item.detailsArchived ? 'warn' : 'info'}">${item.detailsArchived ? 'Resumo arquivado' : formatDateBR(item.date)}</span>
+                  </div>
+                  <p>${safeInt(item.totalRows)} registros • ${safeInt(item.uniqueRawStores)} lojas únicas na planilha • ${safeInt(item.matchedCount)} reconhecidas</p>
+                  <small class="muted">${formatDateBR(item.date)} • ${formatDateTimeBR(item.createdAt)} • ${escapeHtml(item.createdBy || '-')}</small>
+                </div>
+              `).join('')}
+            </div>
+          ` : `<div class="empty">Nenhum histórico resumido ainda.</div>`}
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="section-header">
+            <div>
+              <h3>Lojas reconhecidas na base final</h3>
+              <p>Lista consolidada das lojas previstas, sem duplicidade.</p>
+            </div>
+            <div class="badge-count">${matchedStores.length}</div>
+          </div>
+          ${matchedStores.length ? `
+            <div class="table-wrap compact-table">
+              <table>
+                <thead><tr><th>Loja</th><th>Rede</th><th>Rota</th></tr></thead>
+                <tbody>
+                  ${matchedStores.slice(0, 120).map((store) => {
+                    const route = getRouteById(getEffectiveRoute(store.id, date), appState);
+                    return `<tr><td>${escapeHtml(formatStoreNameForUser(store.name))}</td><td>${escapeHtml(inferStoreNetwork(store))}</td><td>${escapeHtml(route?.name || '-')}</td></tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+            ${matchedStores.length > 120 ? `<p class="muted">Mostrando 120 de ${matchedStores.length} lojas para manter a tela leve.</p>` : ''}
+          ` : `<div class="empty">Nenhuma loja reconhecida ainda para hoje.</div>`}
+        </div>
+
+        <div class="card">
+          <div class="section-header">
+            <div>
+              <h3>Lojas não reconhecidas</h3>
+              <p>Conferir nomes ou cadastrar/vincular depois, se necessário.</p>
+            </div>
+            <div class="badge-count">${consolidated.unmatchedNames.length}</div>
+          </div>
+          ${consolidated.unmatchedNames.length ? `
+            <div class="list">
+              ${consolidated.unmatchedNames.slice(0, 80).map((name) => `<div class="list-item"><strong>${escapeHtml(name)}</strong></div>`).join('')}
+            </div>
+            ${consolidated.unmatchedNames.length > 80 ? `<p class="muted">Mostrando 80 de ${consolidated.unmatchedNames.length} nomes para manter a tela leve.</p>` : ''}
+          ` : `<div class="empty">Todas as lojas da base ativa foram reconhecidas.</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderDashboard() {
   const metrics = getTodayMetrics();
   const forecast = getForecast();
@@ -9637,6 +10184,7 @@ function renderDashboard() {
   const visibleStoreQty = getVisibleStores(appState, currentUser).reduce((acc, store) => addQty(acc, getStoreStock(store.id)), emptyQty());
   const companyBoxTotals = getCompanyBoxTotals(appState);
   const dashboardMovementUser = promoterCompanyDashboard ? { role: 'viewer' } : currentUser;
+  const operationSummary = getDashboardStoreProcessSummary(appState, dashboardMovementUser, todayStr());
   const dashboardCategoryQty = promoterCompanyDashboard ? companyBoxTotals.byType : (showCdForecast ? appState.cdStock : visibleStoreQty);
   const dashboardCategoryTotal = Math.max(1, sumQty(dashboardCategoryQty));
   const routeSummary = routesForDashboard.map((route) => {
@@ -9682,6 +10230,8 @@ function renderDashboard() {
           </div>
         </div>
       `)}
+
+      ${renderDashboardOperationSummary(operationSummary)}
 
       <div class="cards-grid">
         ${showCdForecast ? renderMetricCard('Caixas na Empresa', metrics.company, '🏭', metrics.company < forecast.predicted ? 'critical' : 'success', 'Saldo atual confirmado no CD') : ''}
@@ -12900,6 +13450,7 @@ function bindViewEvents() {
   document.querySelectorAll('.btn-go-inventory').forEach((button) => {
     button.addEventListener('click', () => navigateToView('inventario'));
   });
+  if (currentView === 'baseEntregas') bindBaseEntregasEvents();
   if (currentView === 'saidas') bindSaidasEvents();
   if (currentView === 'resumoEnvios') bindResumoEnviosEvents();
   if (currentView === 'entregasMotorista') bindEntregasMotoristaEvents();
@@ -12919,6 +13470,60 @@ function bindViewEvents() {
   if (currentView === 'divergencias') bindDivergenciasEvents();
   if (currentView === 'usuarios') bindUsuariosEvents();
   bindMovementCorrectionEvents();
+}
+
+
+async function parseDeliveryPlanSpreadsheetFile(file, date) {
+  if (!window.XLSX) {
+    throw new Error('Biblioteca de leitura de Excel não carregou. Atualize a página e tente novamente.');
+  }
+  const buffer = await file.arrayBuffer();
+  const workbook = window.XLSX.read(buffer, { type: 'array', cellDates: true });
+  const sheetName = workbook.SheetNames.find((name) => normalizeText(name).includes('consulta')) || workbook.SheetNames[0];
+  if (!sheetName) throw new Error('A planilha não possui abas para leitura.');
+  const sheet = workbook.Sheets[sheetName];
+  const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
+  if (!rows.length) throw new Error('A planilha não possui registros para importar.');
+  const normalizedRows = rows.map((row) => {
+    const entries = Object.entries(row);
+    const clientEntry = entries.find(([key]) => ['cliente', 'clientes'].includes(normalizeText(key))) || entries.find(([key]) => normalizeText(key).includes('cliente'));
+    const dateEntry = entries.find(([key]) => normalizeText(key).includes('data da venda')) || entries.find(([key]) => normalizeText(key).includes('data'));
+    return {
+      client: clientEntry ? clientEntry[1] : '',
+      date: dateEntry ? dateEntry[1] : date,
+    };
+  });
+  return buildDeliveryPlanImportPayload({ date, fileName: file.name, rows: normalizedRows }, appState);
+}
+
+function bindBaseEntregasEvents() {
+  const form = document.getElementById('form-import-delivery-plan');
+  if (!form) return;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const file = form.file?.files?.[0];
+    const date = form.date?.value || todayStr();
+    if (!file) {
+      showToast('Selecione a planilha para importar.', 'error');
+      return;
+    }
+    try {
+      const importData = await parseDeliveryPlanSpreadsheetFile(file, date);
+      if (!importData.validRows) {
+        showToast(`Nenhum registro da planilha corresponde à data operacional ${formatDateBR(date)}.`, 'error');
+        return;
+      }
+      const result = await persistMutation('IMPORT_DELIVERY_PLAN', {
+        date,
+        fileName: file.name,
+        importData,
+      }, 'Base de entregas importada e consolidada.');
+      if (result.ok) render();
+    } catch (error) {
+      console.error('Erro ao importar planilha:', error);
+      showToast(error.message || 'Não foi possível ler a planilha.', 'error');
+    }
+  });
 }
 
 function bindFechamentoEvents() {

@@ -30,6 +30,9 @@
         <button type="submit" class="btn btn-primary btn-block">Entrar</button>
       </form>
 
+      <button type="button" id="public-dashboard-btn" class="btn btn-secondary btn-block public-dashboard-btn">Acessar Dashboard</button>
+      <p class="public-dashboard-note">Acesso somente leitura para acompanhar o painel de operação.</p>
+
       <div id="password-change-panel" class="password-change-panel hidden">
         <div class="auth-alert">
           <strong>Primeiro acesso</strong>
@@ -100,6 +103,7 @@
 
   <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

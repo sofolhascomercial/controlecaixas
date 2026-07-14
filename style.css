@@ -1053,3 +1053,16 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
   border-radius:12px;
   font-size:.9rem;
 }
+
+/* Acesso público ao Dashboard na tela de login */
+.public-dashboard-btn{
+  margin-top:12px;
+}
+.public-dashboard-note{
+  margin:8px 0 0!important;
+  text-align:center;
+  font-size:.86rem;
+  color:var(--muted);
+}
+body.public-dashboard-mode .sidebar-nav .nav-link:not(.active){display:none}
+body.public-dashboard-mode .sidebar-user-role::after{content:' • somente leitura'}
