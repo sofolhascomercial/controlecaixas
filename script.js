@@ -5580,12 +5580,19 @@ function getStoreOptionLabel(store) {
 }
 
 function parseYmdFromAny(value, fallbackDate = todayStr()) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return formatDateForInput(value);
+  // Datas vindas de planilhas devem ser tratadas como "data pura", sem fuso horário
+  // e sem aplicar a regra operacional das 22h. Isso evita que 15/07 vire 14/07
+  // quando o Excel/SheetJS entrega a data como meia-noite em UTC.
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`;
+  }
   if (typeof value === 'number' && Number.isFinite(value)) {
-    // Excel serial date. Day 1 = 1900-01-01, with Excel's historical leap-year bug handled by this common offset.
-    const utcDays = Math.floor(value - 25569);
-    const date = new Date(utcDays * 86400 * 1000);
-    if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+    // Excel serial date. O número representa um dia inteiro, não um instante com horário.
+    const serial = Math.floor(Number(value));
+    const date = new Date((serial - 25569) * 86400 * 1000);
+    if (!Number.isNaN(date.getTime())) {
+      return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+    }
   }
   const raw = String(value || '').trim();
   if (!raw) return fallbackDate;
@@ -13694,11 +13701,13 @@ async function parseDeliveryPlanSpreadsheetFile(file, date) {
     throw new Error('Biblioteca de leitura de Excel não carregou. Atualize a página e tente novamente.');
   }
   const buffer = await file.arrayBuffer();
-  const workbook = window.XLSX.read(buffer, { type: 'array', cellDates: true });
+  // Manter cellDates=false e raw=true preserva datas do Excel como números seriais.
+  // Assim 46218 é importado como 2026-07-15 sem voltar para 14/07 por causa de fuso horário.
+  const workbook = window.XLSX.read(buffer, { type: 'array', cellDates: false });
   const sheetName = workbook.SheetNames.find((name) => normalizeText(name).includes('consulta')) || workbook.SheetNames[0];
   if (!sheetName) throw new Error('A planilha não possui abas para leitura.');
   const sheet = workbook.Sheets[sheetName];
-  const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
+  const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: '', raw: true });
   if (!rows.length) throw new Error('A planilha não possui registros para importar.');
   const normalizedRows = rows.map((row) => {
     const entries = Object.entries(row);
