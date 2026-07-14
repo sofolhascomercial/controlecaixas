@@ -10731,39 +10731,69 @@ function renderEntregasMotorista() {
   `;
 }
 
+
+function getReceiptCandidatesForStoreDate(storeId, date = todayStr(), user = currentUser, state = appState) {
+  if (!storeId) return [];
+  const store = getStoreById(storeId, state);
+  if (!store || !storeRequiresPromoter(store)) return [];
+  if (user?.role === 'promoter' && store.id !== user.storeId) return [];
+
+  return (state.movements?.outbounds || [])
+    .filter((item) => isActiveMovement(item)
+      && item.status !== 'historico'
+      && item.storeId === storeId
+      && item.date === date
+      && !item.receiptId
+      && !(state.movements?.receipts || []).some((receipt) => isActiveMovement(receipt) && receipt.outboundId === item.id)
+      && isMovementVisibleToUser(item, user, state))
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+function getStoresForUnifiedReceiptValidation(date = todayStr(), user = currentUser, state = appState) {
+  return getActiveStores(state)
+    .filter((store) => storeRequiresPromoter(store))
+    .filter((store) => user?.role !== 'promoter' || store.id === user.storeId)
+    .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+}
+
 function renderRecebimentos() {
   const today = todayStr();
-  const storeFilter = currentUser.role === 'promoter' ? currentUser.storeId : '';
-  const pending = appState.movements.outbounds.filter((item) => {
-    const store = getStoreById(item.storeId);
-    return isActiveMovement(item) && item.date === today && !item.receiptId && !(appState.movements.receipts || []).some((receipt) => isActiveMovement(receipt) && receipt.outboundId === item.id) && item.status !== 'historico' && storeRequiresPromoter(store) && (!storeFilter || item.storeId === storeFilter);
-  }).slice(0, 160);
-  const manualStores = getStoresForManualReceiptValidation(today, currentUser, appState).slice(0, 160);
+  const stores = getStoresForUnifiedReceiptValidation(today, currentUser, appState).slice(0, 240);
+  const receiptsToday = appState.movements.receipts
+    .filter((item) => item.date === today && isMovementVisibleToUser(item, currentUser, appState))
+    .slice(0, 80);
+
   return `
     <div class="grid-2">
       <div class="card">
         <div class="page-header">
           <div>
             <h3>Confirmar recebimento na loja</h3>
+            <p class="muted">Selecione a loja e informe o total recebido. O sistema reconhece automaticamente se existe saída do CD para a data operacional.</p>
           </div>
+          <span class="tag info">Data operacional: ${formatDateBR(today)}</span>
         </div>
 
         <form id="form-recebimento" class="stack">
-          <label>Saída pendente
-            <select name="outboundId" id="recebimento-outbound" required>
-              <option value="">Selecione</option>
-              ${pending.map((item) => `
-                <option value="${item.id}">
-                  ${formatDateBR(item.date)} • ${getStoreById(item.storeId)?.name || '-'}
-                </option>
-              `).join('')}
+          <label>Loja
+            <select name="storeId" id="recebimento-store" required>
+              <option value="">Selecione a loja</option>
+              ${stores.map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
             </select>
           </label>
 
-          <div id="recebimento-resumo" class="helper-card compact small">Selecione a saída.</div>
+          <div id="recebimento-resumo" class="helper-card compact small">Selecione a loja. Se houver saída do CD para hoje, o sistema vai vincular automaticamente.</div>
+
+          <div id="recebimento-outbound-choice" class="hidden">
+            <label>Saída encontrada
+              <select name="outboundId" id="recebimento-outbound">
+                <option value="">Selecione a saída correta</option>
+              </select>
+            </label>
+          </div>
 
           <label>Total de caixas que chegaram na loja
-            <input type="number" min="0" step="1" name="totalReceived" id="recebimento-total" required />
+            <input type="number" min="1" step="1" name="totalReceived" id="recebimento-total" required />
           </label>
 
           <div id="recebimento-detalhe" class="driver-detail-panel hidden">
@@ -10777,38 +10807,15 @@ function renderRecebimentos() {
           </div>
 
           <label>Observação / justificativa
-            <textarea name="justification" placeholder="Obrigatório quando houver diferença ou alguma ocorrência."></textarea>
+            <textarea name="justification" placeholder="Obrigatório quando houver divergência ou quando o recebimento não tiver saída do CD lançada."></textarea>
           </label>
+
+          <div class="helper-card compact small">
+            Se não existir saída do CD para esta loja hoje, o recebimento será salvo como <strong>sem saída do CD</strong> e abrirá pendência para Matheus Reis / Produção conferir.
+          </div>
 
           <div class="form-actions">
             <button type="submit" class="btn btn-primary">Confirmar recebimento</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="card">
-        <div class="section-header">
-          <div>
-            <h3>Recebimento sem saída do CD</h3>
-            <p>Use quando a loja recebeu as caixas, mas a saída não apareceu. A data operacional é automática.</p>
-          </div>
-        </div>
-        <form id="form-recebimento-sem-cd" class="stack">
-          <label>Loja
-            <select name="storeId" required>
-              <option value="">Selecione a loja</option>
-              ${manualStores.map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
-            </select>
-          </label>
-          <label>Total de caixas recebidas
-            <input type="number" min="1" step="1" name="totalReceived" required />
-          </label>
-          <label>Observação
-            <textarea name="justification" placeholder="Ex.: Recebimento realizado, mas saída do CD não estava lançada no sistema."></textarea>
-          </label>
-          <div class="helper-card compact small">Ao salvar, o sistema abre pendência para Matheus Reis / Produção conferir a saída do CD.</div>
-          <div class="form-actions">
-            <button type="submit" class="btn btn-secondary">Registrar sem saída do CD</button>
           </div>
         </form>
       </div>
@@ -10820,7 +10827,7 @@ function renderRecebimentos() {
           </div>
         </div>
         <div class="list">
-          ${appState.movements.receipts.filter((item) => item.date === todayStr() && isMovementVisibleToUser(item, currentUser, appState)).length ? appState.movements.receipts.filter((item) => item.date === todayStr() && isMovementVisibleToUser(item, currentUser, appState)).map((item) => {
+          ${receiptsToday.length ? receiptsToday.map((item) => {
             const outbound = appState.movements.outbounds.find((out) => out.id === item.outboundId);
             return `
               <div class="list-item">
@@ -10828,8 +10835,9 @@ function renderRecebimentos() {
                   <strong>${getStoreById(item.storeId)?.name || '-'}</strong>
                   <small class="muted">${formatDateTimeBR(item.createdAt)}</small>
                 </div>
-                <div class="muted">Saída original: ${sumQty(outbound?.qty || emptyQty())} caixas</div>
-                <div class="kpi-row"><span>Confirmado</span><strong>${sumQty(item.qty)} caixas</strong></div>
+                <div class="muted">${item.pendingCdConfirmation ? 'Recebimento sem saída do CD' : `Saída original: ${sumQty(outbound?.qty || emptyQty())} caixas`}</div>
+                <div class="kpi-row"><span>Confirmado</span><strong>${safeInt(item.totalReceived || sumQty(item.qty))} caixas</strong></div>
+                ${item.pendingCdConfirmation ? '<span class="tag warn">Pendente Produção/CD</span>' : ''}
                 ${canEditReceiptMovement(item) ? `<div class="form-actions"><button type="button" class="btn btn-secondary btn-edit-receipt" data-id="${item.id}">Editar recebimento</button></div>` : ''}
               </div>
             `;
@@ -10839,7 +10847,6 @@ function renderRecebimentos() {
     </div>
   `;
 }
-
 function renderRecolhimentos() {
   const networkFilter = '';
   const availableRoutes = currentUser.role === 'driver'
@@ -13829,13 +13836,22 @@ function bindEntregasMotoristaEvents() {
 function bindRecebimentosEvents() {
   const form = document.getElementById('form-recebimento');
   if (!form) return;
+
+  const storeSelect = document.getElementById('recebimento-store');
   const outboundSelect = document.getElementById('recebimento-outbound');
+  const outboundChoice = document.getElementById('recebimento-outbound-choice');
   const summary = document.getElementById('recebimento-resumo');
   const totalInput = document.getElementById('recebimento-total');
   const detailPanel = document.getElementById('recebimento-detalhe');
   const alertText = document.getElementById('recebimento-alerta');
 
-  const getSelectedOutbound = () => appState.movements.outbounds.find((item) => item.id === outboundSelect.value);
+  const getCandidates = () => getReceiptCandidatesForStoreDate(storeSelect?.value || '', todayStr(), currentUser, appState);
+  const getSelectedOutbound = () => {
+    const candidates = getCandidates();
+    if (!candidates.length) return null;
+    if (candidates.length === 1) return candidates[0];
+    return candidates.find((item) => item.id === outboundSelect?.value) || null;
+  };
 
   const clearReceiptInputs = () => {
     BOX_TYPES.forEach((item) => {
@@ -13844,27 +13860,69 @@ function bindRecebimentosEvents() {
     });
   };
 
-  const updateSummary = () => {
-    const outbound = getSelectedOutbound();
-    if (!outbound) {
-      summary.innerHTML = 'Selecione a saída.';
-      if (detailPanel) detailPanel.classList.add('hidden');
-      clearReceiptInputs();
+  const renderOutboundOptions = (candidates) => {
+    if (!outboundSelect || !outboundChoice) return;
+    if (candidates.length <= 1) {
+      outboundChoice.classList.add('hidden');
+      outboundSelect.innerHTML = candidates.length
+        ? `<option value="${candidates[0].id}" selected>${formatDateBR(candidates[0].date)} • ${escapeHtml(getRouteById(candidates[0].routeId)?.name || 'Sem rota')} • ${sumQty(candidates[0].qty)} caixas</option>`
+        : '<option value="">Sem saída lançada</option>';
       return;
     }
 
-    const store = getStoreById(outbound.storeId);
-    const route = getRouteById(outbound.routeId);
+    outboundChoice.classList.remove('hidden');
+    outboundSelect.innerHTML = '<option value="">Selecione a saída correta</option>' + candidates.map((item) => `
+      <option value="${item.id}">${formatDateBR(item.date)} • ${escapeHtml(getRouteById(item.routeId)?.name || 'Sem rota')} • ${escapeHtml(getUserById(item.driverId)?.name || 'Sem motorista')} • ${sumQty(item.qty)} caixas</option>
+    `).join('');
+  };
+
+  const updateSummary = () => {
+    const store = getStoreById(storeSelect?.value || '');
     const total = safeInt(totalInput?.value);
+    clearReceiptInputs();
+
+    if (!store) {
+      summary.innerHTML = 'Selecione a loja. Se houver saída do CD para hoje, o sistema vai vincular automaticamente.';
+      if (detailPanel) detailPanel.classList.add('hidden');
+      renderOutboundOptions([]);
+      return;
+    }
+
+    const candidates = getCandidates();
+    renderOutboundOptions(candidates);
+
+    if (!candidates.length) {
+      if (detailPanel) detailPanel.classList.add('hidden');
+      summary.innerHTML = `
+        <strong>${escapeHtml(store.name || '-')}</strong>${store.network ? ` • ${escapeHtml(store.network)}` : ''}<br>
+        <span class="tag warn">Nenhuma saída do CD encontrada para ${formatDateBR(todayStr())}</span><br>
+        O recebimento será registrado como <strong>sem saída do CD</strong> e ficará pendente para Produção/CD conferir.
+      `;
+      return;
+    }
+
+    if (candidates.length > 1 && !outboundSelect?.value) {
+      if (detailPanel) detailPanel.classList.add('hidden');
+      summary.innerHTML = `
+        <strong>${escapeHtml(store.name || '-')}</strong><br>
+        <span class="tag warn">Encontramos ${candidates.length} saídas possíveis para esta loja hoje.</span><br>
+        Selecione qual saída deseja vincular antes de confirmar o recebimento.
+      `;
+      return;
+    }
+
+    const outbound = getSelectedOutbound();
+    if (!outbound) return;
+    const route = getRouteById(outbound.routeId);
+    const driver = getUserById(outbound.driverId);
     const expectedTotal = sumQty(outbound.qty);
 
     if (total <= 0) {
-      summary.innerHTML = `
-        <strong>${store?.name || '-'}</strong><br>
-        Data: ${formatDateBR(outbound.date)} • Rota: ${route?.name || '-'}<br>
-        Correto esperado: <strong>${expectedTotal} caixas</strong>
-      `;
       if (detailPanel) detailPanel.classList.add('hidden');
+      summary.innerHTML = `
+        <strong>${escapeHtml(store.name || '-')}</strong>${store.network ? ` • ${escapeHtml(store.network)}` : ''}<br>
+        Saída encontrada: <strong>${expectedTotal} caixas</strong> • Rota: ${escapeHtml(route?.name || '-')} • Motorista: ${escapeHtml(driver?.name || '-')}
+      `;
       return;
     }
 
@@ -13873,9 +13931,9 @@ function bindRecebimentosEvents() {
 
     if (!hasDiff) {
       summary.innerHTML = `
-        <strong>${store?.name || '-'}</strong>${store?.network ? ` • ${store.network}` : ''}<br>
-        Total informado pelo promotor: <strong>${total} caixas</strong><br>
-        <span class="tag ok">Quantidade correta para esta loja</span>
+        <strong>${escapeHtml(store.name || '-')}</strong>${store.network ? ` • ${escapeHtml(store.network)}` : ''}<br>
+        CD lançou: <strong>${expectedTotal} caixas</strong> • Loja informou: <strong>${total} caixas</strong><br>
+        <span class="tag ok">Quantidade correta. O sistema vai vincular automaticamente à saída do CD.</span>
       `;
       return;
     }
@@ -13883,57 +13941,62 @@ function bindRecebimentosEvents() {
     const diff = total - expectedTotal;
     const signal = diff > 0 ? '+' : '';
     summary.innerHTML = `
-      <strong>${store?.name || '-'}</strong>${store?.network ? ` • ${store.network}` : ''}<br>
-      Total informado pelo promotor: <strong>${total} caixas</strong><br>
+      <strong>${escapeHtml(store.name || '-')}</strong>${store.network ? ` • ${escapeHtml(store.network)}` : ''}<br>
+      CD lançou: <strong>${expectedTotal} caixas</strong> • Loja informou: <strong>${total} caixas</strong><br>
       <span class="tag danger">Divergência de ${signal}${diff} caixa(s)</span>
     `;
-    if (alertText) alertText.textContent = `Promotor informou ${total} caixas. Correto esperado: ${expectedTotal}. Diferença: ${signal}${diff}. Informe folhagens e bandejas. Correto para a loja: ${outbound.qty.folhagens} folhagens e ${outbound.qty.bandejas} bandejas.`;
+    if (alertText) alertText.textContent = `Loja informou ${total} caixas. Correto esperado: ${expectedTotal}. Diferença: ${signal}${diff}. Informe folhagens e bandejas. Correto para a loja: ${outbound.qty.folhagens} folhagens e ${outbound.qty.bandejas} bandejas.`;
   };
 
-  outboundSelect.addEventListener('change', () => {
+  storeSelect?.addEventListener('change', () => {
     if (totalInput) totalInput.value = '';
-    clearReceiptInputs();
     updateSummary();
   });
+  outboundSelect?.addEventListener('change', updateSummary);
   totalInput?.addEventListener('input', updateSummary);
   updateSummary();
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const storeId = storeSelect?.value || '';
+    const totalReceived = safeInt(form.totalReceived.value);
+    const justification = form.justification.value.trim();
+    const candidates = getCandidates();
     const outbound = getSelectedOutbound();
-    if (!outbound) {
-      showToast('Selecione a saída para confirmar.', 'error');
+
+    if (!storeId) {
+      showToast('Selecione a loja.', 'error');
       return;
     }
-    const totalReceived = safeInt(form.totalReceived.value);
-    const expectedTotal = sumQty(outbound.qty);
-    const hasDiff = totalReceived !== expectedTotal;
-    const payload = {
-      outboundId: form.outboundId.value,
-      date: todayStr(),
-      totalReceived,
-      qty: hasDiff ? readQtyFromForm(form, 'recebimento') : outbound.qty,
-      justification: form.justification.value.trim(),
-    };
-    const result = await persistMutation('CONFIRM_RECEIPT', payload, 'Recebimento confirmado com sucesso.');
-    if (result.ok) {
-      render();
+    if (totalReceived <= 0) {
+      showToast('Informe o total de caixas recebidas.', 'error');
+      return;
     }
-  });
+    if (candidates.length > 1 && !outbound) {
+      showToast('Existe mais de uma saída para esta loja hoje. Selecione qual saída deseja vincular.', 'error');
+      return;
+    }
 
-  const noOutboundForm = document.getElementById('form-recebimento-sem-cd');
-  noOutboundForm?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const payload = {
-      storeId: noOutboundForm.storeId?.value || '',
-      totalReceived: safeInt(noOutboundForm.totalReceived?.value),
-      justification: noOutboundForm.justification?.value?.trim() || '',
-    };
+    if (outbound) {
+      const expectedTotal = sumQty(outbound.qty);
+      const hasDiff = totalReceived !== expectedTotal;
+      const payload = {
+        outboundId: outbound.id,
+        date: todayStr(),
+        totalReceived,
+        qty: hasDiff ? readQtyFromForm(form, 'recebimento') : outbound.qty,
+        justification,
+      };
+      const result = await persistMutation('CONFIRM_RECEIPT', payload, 'Recebimento confirmado com sucesso.');
+      if (result.ok) render();
+      return;
+    }
+
+    const payload = { storeId, totalReceived, justification };
     const result = await persistMutation('CONFIRM_RECEIPT_NO_OUTBOUND', payload, 'Recebimento registrado sem saída do CD. Pendência enviada para Produção.');
     if (result.ok) render();
   });
 }
-
 function bindRecolhimentosEvents() {
   const form = document.getElementById('form-recolhimento');
   const routeSelect = document.getElementById('pickup-route');
