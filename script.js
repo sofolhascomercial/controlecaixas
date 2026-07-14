@@ -5579,28 +5579,64 @@ function getStoreOptionLabel(store) {
   return parts.filter(Boolean).join(' • ');
 }
 
+function ymdFromUtcDate(date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
 function parseYmdFromAny(value, fallbackDate = todayStr()) {
-  // Datas vindas de planilhas devem ser tratadas como "data pura", sem fuso horário
-  // e sem aplicar a regra operacional das 22h. Isso evita que 15/07 vire 14/07
-  // quando o Excel/SheetJS entrega a data como meia-noite em UTC.
+  // Datas vindas de planilhas são tratadas como DATA PURA.
+  // Não aplicar fuso horário e não aplicar regra operacional das 22h.
+  // Isso evita que uma planilha de 15/07 seja salva como 14/07.
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`;
+    return ymdFromUtcDate(value);
   }
+
   if (typeof value === 'number' && Number.isFinite(value)) {
-    // Excel serial date. O número representa um dia inteiro, não um instante com horário.
+    // Serial do Excel: representa um dia inteiro, não um horário.
+    // 46218 = 2026-07-15. Usar UTC só para extrair ano/mês/dia.
     const serial = Math.floor(Number(value));
-    const date = new Date((serial - 25569) * 86400 * 1000);
-    if (!Number.isNaN(date.getTime())) {
-      return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
-    }
+    const date = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+    if (!Number.isNaN(date.getTime())) return ymdFromUtcDate(date);
   }
+
   const raw = String(value || '').trim();
-  if (!raw) return fallbackDate;
+  if (!raw) return fallbackDate || '';
+
   const ymd = raw.match(/(20\d{2})[-\/]([01]?\d)[-\/]([0-3]?\d)/);
   if (ymd) return `${ymd[1]}-${String(ymd[2]).padStart(2, '0')}-${String(ymd[3]).padStart(2, '0')}`;
-  const dmy = raw.match(/([0-3]?\d)[\/\-]([01]?\d)[\/\-](20\d{2})/);
-  if (dmy) return `${dmy[3]}-${String(dmy[2]).padStart(2, '0')}-${String(dmy[1]).padStart(2, '0')}`;
-  return fallbackDate;
+
+  const dmy4 = raw.match(/([0-3]?\d)[\/\-]([01]?\d)[\/\-](20\d{2})/);
+  if (dmy4) return `${dmy4[3]}-${String(dmy4[2]).padStart(2, '0')}-${String(dmy4[1]).padStart(2, '0')}`;
+
+  // Segurança para datas formatadas pelo Excel/SheetJS como 07-15-26 ou 15/07/26.
+  const short = raw.match(/^([0-3]?\d)[\/\-]([0-3]?\d)[\/\-](\d{2})$/);
+  if (short) {
+    let first = Number(short[1]);
+    let second = Number(short[2]);
+    const year = 2000 + Number(short[3]);
+    let month;
+    let day;
+
+    if (first > 12 && second <= 12) {
+      // 15/07/26
+      day = first;
+      month = second;
+    } else if (second > 12 && first <= 12) {
+      // 07-15-26, comum quando a planilha está com formato mm-dd-yy.
+      month = first;
+      day = second;
+    } else {
+      // Ambíguo: em pt-BR, preferir dia/mês.
+      day = first;
+      month = second;
+    }
+
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  return fallbackDate || '';
 }
 
 function cleanDeliveryPlanClientName(value) {
@@ -8117,9 +8153,10 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const date = payload.date || todayStr();
     const fileName = String(payload.fileName || 'planilha.xlsx').slice(0, 120);
     const importData = payload.importData || {};
+    const importDate = importData.date || date;
     const newImport = {
       id: randomId('plan'),
-      date,
+      date: importDate,
       fileName,
       createdAt: nowIso(),
       createdBy: actor.name,
@@ -13696,7 +13733,7 @@ function bindViewEvents() {
 }
 
 
-async function parseDeliveryPlanSpreadsheetFile(file, date) {
+async function parseDeliveryPlanSpreadsheetFile(file, selectedDate = todayStr()) {
   if (!window.XLSX) {
     throw new Error('Biblioteca de leitura de Excel não carregou. Atualize a página e tente novamente.');
   }
@@ -13709,16 +13746,28 @@ async function parseDeliveryPlanSpreadsheetFile(file, date) {
   const sheet = workbook.Sheets[sheetName];
   const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: '', raw: true });
   if (!rows.length) throw new Error('A planilha não possui registros para importar.');
+
   const normalizedRows = rows.map((row) => {
     const entries = Object.entries(row);
     const clientEntry = entries.find(([key]) => ['cliente', 'clientes'].includes(normalizeText(key))) || entries.find(([key]) => normalizeText(key).includes('cliente'));
     const dateEntry = entries.find(([key]) => normalizeText(key).includes('data da venda')) || entries.find(([key]) => normalizeText(key).includes('data'));
     return {
       client: clientEntry ? clientEntry[1] : '',
-      date: dateEntry ? dateEntry[1] : date,
+      date: dateEntry ? dateEntry[1] : selectedDate,
     };
   });
-  return buildDeliveryPlanImportPayload({ date, fileName: file.name, rows: normalizedRows }, appState);
+
+  const dateCounts = new Map();
+  normalizedRows.forEach((row) => {
+    const parsedDate = parseYmdFromAny(row.date, '');
+    if (!parsedDate) return;
+    dateCounts.set(parsedDate, (dateCounts.get(parsedDate) || 0) + 1);
+  });
+
+  const detectedDate = [...dateCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] || selectedDate || todayStr();
+
+  return buildDeliveryPlanImportPayload({ date: detectedDate, fileName: file.name, rows: normalizedRows }, appState);
 }
 
 function bindBaseEntregasEvents() {
@@ -13734,12 +13783,13 @@ function bindBaseEntregasEvents() {
       }
       try {
         const importData = await parseDeliveryPlanSpreadsheetFile(file, date);
+        const importDate = importData.date || date;
         if (!importData.validRows) {
-          showToast(`Nenhum registro da planilha corresponde à data operacional ${formatDateBR(date)}.`, 'error');
+          showToast(`Nenhum registro da planilha corresponde à data da base ${formatDateBR(importDate)}.`, 'error');
           return;
         }
         const result = await persistMutation('IMPORT_DELIVERY_PLAN', {
-          date,
+          date: importDate,
           fileName: file.name,
           importData,
         }, 'Base de entregas importada e consolidada.');
