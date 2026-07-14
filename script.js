@@ -4259,15 +4259,45 @@ function showToast(message, type = 'ok') {
   showToast.timer = setTimeout(() => els.toast.classList.remove('show'), 3000);
 }
 
-function todayStr(date = new Date()) {
+function getSaoPauloDateParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('pt-BR', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
   }).formatToParts(date);
   const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${map.year}-${map.month}-${map.day}`;
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour === '24' ? '0' : map.hour),
+    minute: Number(map.minute || 0),
+  };
+}
+
+function ymdFromParts(parts) {
+  return `${String(parts.year).padStart(4, '0')}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+}
+
+function addDaysToYmd(ymd, days = 0) {
+  const [year, month, day] = String(ymd).split('-').map(Number);
+  const dt = new Date(Date.UTC(year, month - 1, day + Number(days || 0), 12, 0, 0));
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+}
+
+function todayStr(date = new Date()) {
+  const parts = getSaoPauloDateParts(date);
+  const base = ymdFromParts(parts);
+  // Data operacional Só Folhas: a partir das 22h, já conta como entrega do dia seguinte.
+  return parts.hour >= 22 ? addDaysToYmd(base, 1) : base;
+}
+
+function calendarTodayStr(date = new Date()) {
+  return ymdFromParts(getSaoPauloDateParts(date));
 }
 
 function nowIso() {
@@ -4532,11 +4562,150 @@ function getStoreUnitName(store) {
   return value || formatStoreNameForUser(store?.name || '-');
 }
 
-function getStoreOptionLabel(store) {
-  const fullName = formatStoreNameForUser(store?.name || '-');
+function getStoreScheduleTokens(store) {
+  return [
+    store?.id || '',
+    store?.name || '',
+    formatStoreNameForUser(store?.name || ''),
+    getStoreUnitName(store),
+    inferStoreNetwork(store),
+  ].map(normalizeText).filter(Boolean);
+}
+
+function storeMatchesAnyAlias(store, aliases = []) {
+  const tokens = getStoreScheduleTokens(store);
+  const normalizedAliases = aliases.map(normalizeText).filter(Boolean);
+  return normalizedAliases.some((alias) => tokens.some((token) =>
+    token === alias ||
+    token.includes(alias)
+  ));
+}
+
+function weekdayIndexFromYmd(dateStr = todayStr()) {
+  const [year, month, day] = String(dateStr || todayStr()).split('-').map(Number);
+  if (!year || !month || !day) return 0;
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).getUTCDay();
+}
+
+function isWeekdayIn(dateStr, allowedDays) {
+  return allowedDays.includes(weekdayIndexFromYmd(dateStr));
+}
+
+function getStoreDeliveryScheduleInfo(store, date = todayStr()) {
+  if (!store || !isActiveStore(store) || store.supportPoint || store.emptyBoxOnly) {
+    return { expected: false, mode: 'none', rule: 'Loja sem agenda automática.' };
+  }
+
   const network = inferStoreNetwork(store);
-  const unit = getStoreUnitName(store);
-  return `${fullName} — Rede ${network}, Loja ${unit}`;
+  const sunday = weekdayIndexFromYmd(date) === 0;
+  const tueThuSat = [2, 4, 6];
+  const monWedFri = [1, 3, 5];
+
+  // Regras específicas por loja prevalecem sobre a rede.
+  if (storeMatchesAnyAlias(store, ['costa rio verde'])) {
+    return { expected: isWeekdayIn(date, tueThuSat), mode: 'scheduled', rule: 'Costa Rio Verde: terça, quinta e sábado.' };
+  }
+  if (storeMatchesAnyAlias(store, ['economart lem', 'economart barreiras', 'assai teotonio', 'assai cesamar', 'assaí teotônio', 'assaí cesamar'])) {
+    return { expected: isWeekdayIn(date, tueThuSat), mode: 'scheduled', rule: 'Loja com entrega terça, quinta e sábado.' };
+  }
+
+  if (network === 'Bretas') {
+    return { expected: false, mode: 'on_demand', rule: 'Bretas funciona por demanda; não gera cobrança automática de saída do CD.' };
+  }
+
+  if (network === 'Dia a Dia') {
+    if (storeMatchesAnyAlias(store, ['gurupi', 'lem', 'lem ba', 'goianesia'])) {
+      return { expected: isWeekdayIn(date, tueThuSat), mode: 'scheduled', rule: 'Dia a Dia Gurupi/LEM/Goianésia: terça, quinta e sábado.' };
+    }
+    if (storeMatchesAnyAlias(store, ['itumbiara'])) {
+      return { expected: isWeekdayIn(date, monWedFri), mode: 'scheduled', rule: 'Dia a Dia Itumbiara: segunda, quarta e sexta.' };
+    }
+    if (storeMatchesAnyAlias(store, ['formosa', 'santo antonio', 'planaltina go'])) {
+      return { expected: !sunday, mode: 'scheduled', rule: 'Dia a Dia Formosa/Santo Antônio/Planaltina-GO: não entrega domingo.' };
+    }
+    return { expected: true, mode: 'scheduled', rule: 'Dia a Dia: entrega diária.' };
+  }
+
+  if (network === 'Costa') {
+    return { expected: true, mode: 'scheduled', rule: 'Costa: entrega diária.' };
+  }
+
+  if (network === 'Comper' || network === 'Fort') {
+    if (network === 'Comper' && storeMatchesAnyAlias(store, ['sobradinho'])) {
+      return { expected: !sunday, mode: 'scheduled', rule: 'Comper Sobradinho: não entrega domingo.' };
+    }
+    return { expected: true, mode: 'scheduled', rule: 'Comper/Fort: entrega diária.' };
+  }
+
+  if (network === 'Vivendas') {
+    if (storeMatchesAnyAlias(store, ['brtw', 'lunabel', 'luna', 'vs', 'sv'])) {
+      return { expected: !sunday, mode: 'scheduled', rule: 'Vivendas BRTW/Lunabel/VS/SV: não entrega domingo.' };
+    }
+    return { expected: true, mode: 'scheduled', rule: 'Vivendas: entrega diária.' };
+  }
+
+  if (network === 'Nossa Kaza') {
+    return { expected: !sunday, mode: 'scheduled', rule: 'Nossa Kaza: não entrega domingo.' };
+  }
+
+  if (network === 'Economart' || network === 'Assaí') {
+    return { expected: false, mode: 'none', rule: `${network}: sem agenda automática, exceto lojas específicas configuradas.` };
+  }
+
+  return { expected: false, mode: 'none', rule: 'Rede sem agenda automática configurada.' };
+}
+
+function storeHasExpectedDeliveryOnDate(store, date = todayStr()) {
+  return getStoreDeliveryScheduleInfo(store, date).expected;
+}
+
+function getActiveOutboundForStoreAndDateSet(date = todayStr(), state = appState) {
+  return new Set((state.movements?.outbounds || [])
+    .filter((item) => isActiveMovement(item) && item.status !== 'historico' && item.date === date)
+    .map((item) => item.storeId));
+}
+
+function getStoresForManualDriverValidation(date = todayStr(), user = currentUser, state = appState) {
+  const withOutbound = getActiveOutboundForStoreAndDateSet(date, state);
+  return getActiveStores(state)
+    .filter((store) => !withOutbound.has(store.id))
+    .filter((store) => storeRequiresDriver(store))
+    .filter((store) => user?.role !== 'driver' || canUserSeeStore(store.id, user, date, state))
+    .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+}
+
+function getStoresForManualReceiptValidation(date = todayStr(), user = currentUser, state = appState) {
+  const withOutbound = getActiveOutboundForStoreAndDateSet(date, state);
+  return getActiveStores(state)
+    .filter((store) => !withOutbound.has(store.id))
+    .filter((store) => storeRequiresPromoter(store))
+    .filter((store) => user?.role !== 'promoter' || store.id === user.storeId)
+    .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+}
+
+function createSystemOutboundFromValidation(state, actor, { date, storeId, routeId, driverId, totalQty, source }) {
+  const store = getStoreById(storeId, state);
+  const qty = buildQtyFromTotal(totalQty, emptyQty());
+  const outbound = {
+    id: randomId('out'),
+    date,
+    storeId,
+    routeId,
+    driverId,
+    qty,
+    totalQty: safeInt(totalQty),
+    status: 'pendente_conferencia_cd',
+    source: source || 'validacao_sem_saida_cd',
+    pendingCdConfirmation: true,
+    cdLaunchMissing: true,
+    network: inferStoreNetwork(store),
+    separator: getStoreSeparator(store) || null,
+    createdBy: actor.name,
+    createdById: actor.id,
+    createdAt: nowIso(),
+  };
+  state.movements.outbounds.unshift(outbound);
+  return outbound;
 }
 
 
@@ -5263,6 +5432,7 @@ function withPendencyOwner(item, kind, context = {}, state = appState) {
 
 function getDivergenceOwnerKind(div) {
   if (!div) return 'admin';
+  if (div.type === 'saida_cd_nao_lancada') return 'cd';
   if (div.type === 'recebimento_loja') return 'promoterReceipt';
   if (div.type === 'entrega_motorista_loja' || div.type === 'retorno_cd' || div.type === 'frete_goiania_retorno_vinicius') return 'driverDelivery';
   if (div.type === 'carga_goiania') return 'goiania';
@@ -6239,6 +6409,92 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     audit('Lojas', 'Loja excluída', `${store.name} foi removida da lista ativa. Motivo: ${reason}.`);
   }
 
+  if (type === 'CONFIRM_DRIVER_DELIVERY_NO_OUTBOUND') {
+    if (!['admin', 'driver'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou motorista pode registrar entrega sem saída do CD.' };
+    const date = todayStr();
+    const store = getStoreById(payload.storeId, state);
+    if (!store) return { ok: false, error: 'Selecione uma loja válida.' };
+    if (!storeRequiresDriver(store)) return { ok: false, error: 'Esta loja não exige validação do motorista.' };
+    if (actor.role === 'driver' && !canUserSeeStore(store.id, actor, date, state)) return { ok: false, error: 'Motorista só pode registrar lojas da própria rota/carga.' };
+    if (getActiveOutboundForStoreDate(store.id, date, state)) return { ok: false, error: 'Esta loja já possui saída lançada para a data operacional. Use a validação normal.' };
+    const totalDelivered = safeInt(payload.totalDelivered);
+    if (totalDelivered <= 0) return { ok: false, error: 'Informe o total de caixas deixadas na loja.' };
+    const routeId = getEffectiveRoute(store.id, date, state);
+    if (!routeId) return { ok: false, error: 'Esta loja não possui rota cadastrada para a data operacional.' };
+    const driverId = actor.role === 'driver' ? actor.id : (payload.driverId || getEffectiveDriver(routeId, date, store.id, state));
+    if (!driverId) return { ok: false, error: 'Não foi possível identificar o motorista/rota dessa loja.' };
+
+    const outbound = createSystemOutboundFromValidation(state, actor, {
+      date, storeId: store.id, routeId, driverId, totalQty: totalDelivered, source: 'motorista_sem_saida_cd'
+    });
+    const qty = sanitizeQty(outbound.qty);
+    const delivery = {
+      id: randomId('drvdel'),
+      outboundId: outbound.id,
+      date,
+      routeId,
+      driverId,
+      originalDriverId: driverId,
+      storeId: store.id,
+      expectedQty: emptyQty(),
+      totalDelivered,
+      actualQty: qty,
+      hasDivergence: true,
+      pendingCdConfirmation: true,
+      source: 'sem_saida_cd',
+      notes: payload.notes || 'Entrega registrada sem saída do CD lançada no sistema.',
+      createdBy: actor.name,
+      createdById: actor.id,
+      createdAt: nowIso(),
+    };
+    state.movements.driverDeliveries.unshift(delivery);
+    outbound.driverDeliveryId = delivery.id;
+    outbound.driverDeliveredTotal = totalDelivered;
+    outbound.driverDeliveredQty = qty;
+    outbound.driverDeliveredBy = actor.name;
+    outbound.status = storeRequiresPromoter(store) ? 'validada_motorista_sem_cd' : 'recebida_motorista_sem_cd';
+
+    if (!storeRequiresPromoter(store)) {
+      state.storeStocks[store.id] = addQty(getStoreStock(store.id, state), qty);
+      const receipt = {
+        id: randomId('rec'),
+        outboundId: outbound.id,
+        driverDeliveryId: delivery.id,
+        date,
+        storeId: store.id,
+        qty,
+        totalReceived: totalDelivered,
+        pendingCdConfirmation: true,
+        source: 'motorista_sem_saida_cd',
+        createdBy: actor.name,
+        createdById: actor.id,
+        createdAt: nowIso(),
+      };
+      state.movements.receipts.unshift(receipt);
+      outbound.receiptId = receipt.id;
+      outbound.receivedQty = qty;
+    }
+
+    openDivergence({
+      type: 'saida_cd_nao_lancada',
+      outboundId: outbound.id,
+      driverDeliveryId: delivery.id,
+      date,
+      routeId,
+      driverId,
+      storeId: store.id,
+      expectedQty: emptyQty(),
+      actualQty: qty,
+      differenceQty: qty,
+      justification: payload.notes || 'Motorista validou entrega, mas não existia saída do CD lançada para a loja/data operacional.',
+      originJustification: payload.notes || '',
+      responsibleUserId: PENDENCY_OWNER_RULES.cd.userId,
+      responsibleRole: 'cd',
+      requiresResponsibleExplanation: false,
+    });
+    audit('Entrega do Motorista', 'Entrega sem saída do CD', `${actor.name} registrou ${totalDelivered} caixas deixadas em ${store.name} sem saída do CD lançada. Pendência enviada para Produção/CD.`);
+  }
+
   if (type === 'CONFIRM_DRIVER_DELIVERY') {
     if (!['admin', 'driver'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou motorista pode validar entrega.' };
     const outbound = state.movements.outbounds.find((item) => item.id === payload.outboundId);
@@ -6872,6 +7128,66 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
 
     recalculateOutboundDivergences(outbound, `Correção do recebimento da loja: ${reason}`);
     audit('Recebimento na Loja', 'Recebimento corrigido', `${actor.name} corrigiu ${getStoreById(receipt.storeId, state)?.name || '-'} de ${sumQty(oldQty)} para ${sumQty(newQty)} caixas. Motivo: ${reason}`);
+  }
+
+  if (type === 'CONFIRM_RECEIPT_NO_OUTBOUND') {
+    if (!['admin', 'promoter'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou promotor pode registrar recebimento sem saída do CD.' };
+    const date = todayStr();
+    const store = getStoreById(payload.storeId, state);
+    if (!store) return { ok: false, error: 'Selecione uma loja válida.' };
+    if (!storeRequiresPromoter(store)) return { ok: false, error: 'Esta loja não exige validação do promotor.' };
+    if (actor.role === 'promoter' && store.id !== actor.storeId) return { ok: false, error: 'Promotor só pode registrar a própria loja.' };
+    if (getActiveOutboundForStoreDate(store.id, date, state)) return { ok: false, error: 'Esta loja já possui saída lançada para a data operacional. Use o recebimento normal.' };
+    const totalReceived = safeInt(payload.totalReceived);
+    if (totalReceived <= 0) return { ok: false, error: 'Informe o total de caixas recebidas.' };
+    const routeId = getEffectiveRoute(store.id, date, state);
+    if (!routeId) return { ok: false, error: 'Esta loja não possui rota cadastrada para a data operacional.' };
+    const driverId = payload.driverId || getEffectiveDriver(routeId, date, store.id, state);
+
+    const outbound = createSystemOutboundFromValidation(state, actor, {
+      date, storeId: store.id, routeId, driverId, totalQty: totalReceived, source: 'promotor_sem_saida_cd'
+    });
+    const qty = sanitizeQty(outbound.qty);
+    state.storeStocks[store.id] = addQty(getStoreStock(store.id, state), qty);
+    const receipt = {
+      id: randomId('rec'),
+      outboundId: outbound.id,
+      date,
+      storeId: store.id,
+      expectedQty: emptyQty(),
+      totalReceived,
+      qty,
+      hasDivergence: true,
+      pendingCdConfirmation: true,
+      source: 'promotor_sem_saida_cd',
+      justification: payload.justification || 'Recebimento registrado sem saída do CD lançada no sistema.',
+      createdBy: actor.name,
+      createdById: actor.id,
+      createdAt: nowIso(),
+    };
+    state.movements.receipts.unshift(receipt);
+    outbound.receiptId = receipt.id;
+    outbound.receivedQty = qty;
+    outbound.status = 'recebida_sem_cd';
+
+    openDivergence({
+      type: 'saida_cd_nao_lancada',
+      outboundId: outbound.id,
+      receiptId: receipt.id,
+      date,
+      routeId,
+      driverId,
+      storeId: store.id,
+      expectedQty: emptyQty(),
+      actualQty: qty,
+      differenceQty: qty,
+      justification: payload.justification || 'Loja/promotor confirmou recebimento, mas não existia saída do CD lançada para a loja/data operacional.',
+      originJustification: payload.justification || '',
+      responsibleUserId: PENDENCY_OWNER_RULES.cd.userId,
+      responsibleRole: 'cd',
+      requiresResponsibleExplanation: false,
+    });
+    audit('Recebimento na Loja', 'Recebimento sem saída do CD', `${actor.name} registrou ${totalReceived} caixas recebidas em ${store.name} sem saída do CD lançada. Pendência enviada para Produção/CD.`);
   }
 
   if (type === 'CONFIRM_RECEIPT') {
@@ -8436,6 +8752,9 @@ function describeDivergence(div, state = appState) {
   if (div.type === 'entrega_motorista_loja') {
     return `${driverName || 'Motorista'} informou quantidade diferente ao deixar caixas em ${storeName || 'loja'}${routeName ? ` na ${routeName}` : ''}.`;
   }
+  if (div.type === 'saida_cd_nao_lancada') {
+    return `${storeName || 'Loja'} teve entrega/recebimento registrado sem saída do CD lançada${routeName ? ` na ${routeName}` : ''}.`;
+  }
   if (div.type === 'carga_goiania') {
     return `Carga total de Goiânia saiu diferente da soma lançada pelo CD/galpão.`;
   }
@@ -8458,6 +8777,7 @@ function describeDivergence(div, state = appState) {
 }
 
 function getDivergenceTitle(div) {
+  if (div.type === 'saida_cd_nao_lancada') return 'Saída do CD não lançada';
   if (div.type === 'entrega_motorista_loja') return 'Entrega do Motorista';
   if (div.type === 'carga_goiania') return 'Carga Goiânia';
   if (div.type === 'frete_goiania_retorno_vinicius') return 'Frete Goiânia';
@@ -8490,6 +8810,9 @@ function getDivergenceExplanationStatusTag(div) {
 }
 
 function getDivergenceQtyLabels(div) {
+  if (div.type === 'saida_cd_nao_lancada') {
+    return { expected: 'Saída lançada pelo CD', actual: 'Informado pela ponta', diff: 'Pendente CD' };
+  }
   if (div.type === 'entrega_motorista_loja') {
     return { expected: 'Correto esperado para a loja', actual: 'Deixado pelo motorista', diff: 'Erro real' };
   }
@@ -8522,6 +8845,9 @@ function getDivergenceRealErrorText(div) {
     return `O total bateu, mas existe diferença por tipo de caixa entre ${labels.expected.toLowerCase()} e ${labels.actual.toLowerCase()}.`;
   }
 
+  if (div.type === 'saida_cd_nao_lancada') {
+    return `A ponta informou ${actualTotal} caixas, mas não havia saída do CD lançada para essa loja/data. Pendência: Produção/CD conferir e regularizar.`;
+  }
   if (div.type === 'entrega_motorista_loja') {
     return `O motorista informou ${actualTotal} caixas deixadas, mas o correto para a loja era ${expectedTotal}. Diferença total: ${signal}${diffTotal} caixas.`;
   }
@@ -8989,6 +9315,25 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
   const receiptByOutbound = new Map(activeReceipts.map((item) => [item.outboundId, item]));
 
   const outbounds = state.movements.outbounds.filter((item) => isActiveMovement(item) && item.date === date && item.status !== 'historico');
+  const outboundStoreIds = new Set(outbounds.map((item) => item.storeId));
+
+  getActiveStores(state).forEach((store) => {
+    if (outboundStoreIds.has(store.id)) return;
+    const schedule = getStoreDeliveryScheduleInfo(store, date);
+    if (!schedule.expected) return;
+    const routeId = getEffectiveRoute(store.id, date, state);
+    pendencies.push(withPendencyOwner({
+      area: 'Saída do CD não lançada',
+      responsibleRole: 'cd',
+      responsibleUserId: null,
+      responsibleName: 'Produção / CD',
+      storeId: store.id,
+      routeId,
+      date,
+      description: `${store.name || '-'} tinha entrega prevista em ${formatDateBR(date)}, mas o CD ainda não lançou a saída. Regra: ${schedule.rule}`,
+      priority: 'danger',
+    }, 'cd', { storeId: store.id, routeId }, state));
+  });
 
   outbounds.forEach((outbound) => {
     const store = getStoreById(outbound.storeId, state);
@@ -9732,6 +10077,7 @@ function renderEntregasMotorista() {
     }
     return true;
   }).slice(0, 80);
+  const manualStores = getStoresForManualDriverValidation(today, currentUser, appState).slice(0, 160);
   const recent = (appState.movements.driverDeliveries || []).filter((item) => {
     if (!isActiveMovement(item) || !isMovementVisibleToUser(item, currentUser, appState)) return false;
     if (currentUser.role === 'driver') return item.date === today;
@@ -9786,6 +10132,33 @@ function renderEntregasMotorista() {
       <div class="card">
         <div class="section-header">
           <div>
+            <h3>Entrega sem saída do CD</h3>
+            <p>Use quando a loja não apareceu na lista, mas a entrega aconteceu. A data operacional é automática.</p>
+          </div>
+        </div>
+        <form id="form-entrega-sem-cd" class="stack">
+          <label>Loja entregue
+            <select name="storeId" required>
+              <option value="">Selecione a loja</option>
+              ${manualStores.map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
+            </select>
+          </label>
+          <label>Total de caixas deixadas
+            <input type="number" min="1" step="1" name="totalDelivered" required />
+          </label>
+          <label>Observação
+            <textarea name="notes" placeholder="Ex.: Entrega realizada, mas saída do CD não estava lançada no sistema."></textarea>
+          </label>
+          <div class="helper-card compact small">Ao salvar, o sistema abre pendência para Matheus Reis / Produção conferir a saída do CD.</div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-secondary">Registrar sem saída do CD</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="section-header">
+          <div>
             <h3>Validações recentes</h3>
           </div>
         </div>
@@ -9809,11 +10182,13 @@ function renderEntregasMotorista() {
 }
 
 function renderRecebimentos() {
+  const today = todayStr();
   const storeFilter = currentUser.role === 'promoter' ? currentUser.storeId : '';
   const pending = appState.movements.outbounds.filter((item) => {
     const store = getStoreById(item.storeId);
-    return isActiveMovement(item) && !item.receiptId && !(appState.movements.receipts || []).some((receipt) => isActiveMovement(receipt) && receipt.outboundId === item.id) && item.status !== 'historico' && storeRequiresPromoter(store) && (!storeFilter || item.storeId === storeFilter);
-  });
+    return isActiveMovement(item) && item.date === today && !item.receiptId && !(appState.movements.receipts || []).some((receipt) => isActiveMovement(receipt) && receipt.outboundId === item.id) && item.status !== 'historico' && storeRequiresPromoter(store) && (!storeFilter || item.storeId === storeFilter);
+  }).slice(0, 160);
+  const manualStores = getStoresForManualReceiptValidation(today, currentUser, appState).slice(0, 160);
   return `
     <div class="grid-2">
       <div class="card">
@@ -9857,6 +10232,33 @@ function renderRecebimentos() {
 
           <div class="form-actions">
             <button type="submit" class="btn btn-primary">Confirmar recebimento</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="section-header">
+          <div>
+            <h3>Recebimento sem saída do CD</h3>
+            <p>Use quando a loja recebeu as caixas, mas a saída não apareceu. A data operacional é automática.</p>
+          </div>
+        </div>
+        <form id="form-recebimento-sem-cd" class="stack">
+          <label>Loja
+            <select name="storeId" required>
+              <option value="">Selecione a loja</option>
+              ${manualStores.map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`).join('')}
+            </select>
+          </label>
+          <label>Total de caixas recebidas
+            <input type="number" min="1" step="1" name="totalReceived" required />
+          </label>
+          <label>Observação
+            <textarea name="justification" placeholder="Ex.: Recebimento realizado, mas saída do CD não estava lançada no sistema."></textarea>
+          </label>
+          <div class="helper-card compact small">Ao salvar, o sistema abre pendência para Matheus Reis / Produção conferir a saída do CD.</div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-secondary">Registrar sem saída do CD</button>
           </div>
         </form>
       </div>
@@ -12805,6 +13207,18 @@ function bindEntregasMotoristaEvents() {
     const result = await persistMutation('CONFIRM_DRIVER_DELIVERY', payload, 'Entrega do motorista validada.');
     if (result.ok) render();
   });
+
+  const noOutboundForm = document.getElementById('form-entrega-sem-cd');
+  noOutboundForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+      storeId: noOutboundForm.storeId?.value || '',
+      totalDelivered: safeInt(noOutboundForm.totalDelivered?.value),
+      notes: noOutboundForm.notes?.value?.trim() || '',
+    };
+    const result = await persistMutation('CONFIRM_DRIVER_DELIVERY_NO_OUTBOUND', payload, 'Entrega registrada sem saída do CD. Pendência enviada para Produção.');
+    if (result.ok) render();
+  });
 }
 
 function bindRecebimentosEvents() {
@@ -12900,6 +13314,18 @@ function bindRecebimentosEvents() {
     if (result.ok) {
       render();
     }
+  });
+
+  const noOutboundForm = document.getElementById('form-recebimento-sem-cd');
+  noOutboundForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+      storeId: noOutboundForm.storeId?.value || '',
+      totalReceived: safeInt(noOutboundForm.totalReceived?.value),
+      justification: noOutboundForm.justification?.value?.trim() || '',
+    };
+    const result = await persistMutation('CONFIRM_RECEIPT_NO_OUTBOUND', payload, 'Recebimento registrado sem saída do CD. Pendência enviada para Produção.');
+    if (result.ok) render();
   });
 }
 
