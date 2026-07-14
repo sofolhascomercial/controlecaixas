@@ -5662,9 +5662,77 @@ function findStoreForDeliveryPlanClient(rawName, state = appState) {
   return bestScore >= 500 ? best : null;
 }
 
+function getDeliveryPlanAliases(state = appState) {
+  return Array.isArray(state.deliveryPlanAliases)
+    ? state.deliveryPlanAliases.filter((item) => item && item.status !== 'ignored')
+    : [];
+}
+
+function getDeliveryPlanAliasForName(rawName, state = appState) {
+  const normalized = normalizeDeliveryPlanClientName(rawName);
+  if (!normalized) return null;
+  return getDeliveryPlanAliases(state).find((item) => item.normalizedName === normalized || normalizeDeliveryPlanClientName(item.rawName || '') === normalized) || null;
+}
+
+function findStoreForDeliveryPlanClientWithAlias(rawName, state = appState) {
+  const alias = getDeliveryPlanAliasForName(rawName, state);
+  if (alias?.storeId) {
+    const store = getStoreById(alias.storeId, state);
+    if (store) return store;
+  }
+  return findStoreForDeliveryPlanClient(rawName, state);
+}
+
+function isDeliveryPlanNameIgnored(rawName, state = appState) {
+  const normalized = normalizeDeliveryPlanClientName(rawName);
+  return !!(state.deliveryPlanAliases || []).find((item) => item && item.status === 'ignored' && (item.normalizedName === normalized || normalizeDeliveryPlanClientName(item.rawName || '') === normalized));
+}
+
+function resolveDeliveryPlanRecordStore(row, state = appState) {
+  if (row?.storeId) {
+    const store = getStoreById(row.storeId, state);
+    if (store) return store;
+  }
+  return findStoreForDeliveryPlanClientWithAlias(row?.rawName || '', state);
+}
+
+function summarizeDeliveryPlanImport(item, state = appState) {
+  const storeIds = new Set();
+  const unmatched = [];
+  if (!item || item.detailsArchived || item.removedAt) {
+    return {
+      matchedStoreIds: [],
+      unmatchedNames: [],
+      matchedCount: safeInt(item?.matchedCount),
+      unmatchedCount: safeInt(item?.unmatchedCount),
+    };
+  }
+  const rows = Array.isArray(item.records) && item.records.length
+    ? item.records
+    : [
+        ...(item.matchedStoreIds || []).map((storeId) => ({ storeId, rawName: '' })),
+        ...(item.unmatchedNames || []).map((rawName) => ({ storeId: null, rawName })),
+      ];
+
+  rows.forEach((row) => {
+    if (isDeliveryPlanNameIgnored(row.rawName || '', state)) return;
+    const store = resolveDeliveryPlanRecordStore(row, state);
+    if (store) storeIds.add(store.id);
+    else if (row.rawName) unmatched.push(row.rawName);
+  });
+
+  const uniqueUnmatched = [...new Set(unmatched)].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  return {
+    matchedStoreIds: [...storeIds],
+    unmatchedNames: uniqueUnmatched,
+    matchedCount: storeIds.size,
+    unmatchedCount: uniqueUnmatched.length,
+  };
+}
+
 function getActiveDeliveryPlanImports(date = todayStr(), state = appState) {
   return (state.deliveryPlanImports || [])
-    .filter((item) => !item.detailsArchived && item.date === date)
+    .filter((item) => !item.removedAt && !item.detailsArchived && item.date === date)
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 }
 
@@ -5676,11 +5744,12 @@ function getDeliveryPlanConsolidated(date = todayStr(), state = appState) {
   let validRows = 0;
   let duplicateCount = 0;
   imports.forEach((item) => {
+    const summary = summarizeDeliveryPlanImport(item, state);
     totalRows += safeInt(item.totalRows);
     validRows += safeInt(item.validRows);
     duplicateCount += safeInt(item.duplicateCount);
-    (item.matchedStoreIds || []).forEach((id) => id && storeIds.add(id));
-    (item.unmatchedNames || []).forEach((name) => name && unmatched.add(name));
+    summary.matchedStoreIds.forEach((id) => id && storeIds.add(id));
+    summary.unmatchedNames.forEach((name) => name && unmatched.add(name));
   });
   return {
     date,
@@ -5710,7 +5779,8 @@ function buildDeliveryPlanImportPayload({ date, fileName, rows }, state = appSta
   const matchedStoreIds = new Set();
   const unmatchedNames = [];
   uniqueRawMap.forEach((rawName, normalizedName) => {
-    const store = findStoreForDeliveryPlanClient(rawName, state);
+    if (isDeliveryPlanNameIgnored(rawName, state)) return;
+    const store = findStoreForDeliveryPlanClientWithAlias(rawName, state);
     if (store) {
       matchedStoreIds.add(store.id);
       records.push({ rawName, normalizedName, storeId: store.id, storeName: store.name });
@@ -5769,6 +5839,7 @@ function ensureStateShape(state) {
   base.movements.releasedBoxes = Array.isArray(base.movements.releasedBoxes) ? base.movements.releasedBoxes : [];
   base.reliefDriverAssignments = Array.isArray(base.reliefDriverAssignments) ? base.reliefDriverAssignments : [];
   base.deliveryPlanImports = Array.isArray(base.deliveryPlanImports) ? base.deliveryPlanImports : [];
+  base.deliveryPlanAliases = Array.isArray(base.deliveryPlanAliases) ? base.deliveryPlanAliases : [];
 
   base.movements.outbounds = base.movements.outbounds.map((item) => ({
     ...item,
@@ -5852,15 +5923,32 @@ function ensureStateShape(state) {
     unmatchedCount: safeInt(item.unmatchedCount),
     duplicateCount: safeInt(item.duplicateCount),
     detailsArchived: !!item.detailsArchived,
-    matchedStoreIds: Array.isArray(item.matchedStoreIds) && !item.detailsArchived ? [...new Set(item.matchedStoreIds.filter(Boolean))] : [],
-    unmatchedNames: Array.isArray(item.unmatchedNames) && !item.detailsArchived ? [...new Set(item.unmatchedNames.filter(Boolean))].slice(0, 200) : [],
-    records: Array.isArray(item.records) && !item.detailsArchived ? item.records.slice(0, 600).map((row) => ({
+    archivedAt: item.archivedAt || '',
+    removedAt: item.removedAt || '',
+    removedBy: item.removedBy || '',
+    matchedStoreIds: Array.isArray(item.matchedStoreIds) && !item.detailsArchived && !item.removedAt ? [...new Set(item.matchedStoreIds.filter(Boolean))] : [],
+    unmatchedNames: Array.isArray(item.unmatchedNames) && !item.detailsArchived && !item.removedAt ? [...new Set(item.unmatchedNames.filter(Boolean))].slice(0, 200) : [],
+    records: Array.isArray(item.records) && !item.detailsArchived && !item.removedAt ? item.records.slice(0, 600).map((row) => ({
       rawName: String(row.rawName || ''),
-      normalizedName: String(row.normalizedName || normalizeText(row.rawName || '')),
+      normalizedName: String(row.normalizedName || normalizeDeliveryPlanClientName(row.rawName || '')),
       storeId: row.storeId || null,
       storeName: row.storeName || null,
     })) : [],
   })).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+
+  base.deliveryPlanAliases = base.deliveryPlanAliases.map((item) => ({
+    ...item,
+    id: item.id || randomId('alias'),
+    rawName: String(item.rawName || ''),
+    normalizedName: item.normalizedName || normalizeDeliveryPlanClientName(item.rawName || ''),
+    storeId: item.storeId || '',
+    storeName: item.storeName || '',
+    status: item.status || 'linked',
+    createdAt: item.createdAt || nowIso(),
+    createdBy: item.createdBy || 'Sistema',
+    createdById: item.createdById || '',
+    updatedAt: item.updatedAt || item.createdAt || nowIso(),
+  })).filter((item) => item.normalizedName);
 
   base.divergences = Array.isArray(base.divergences) ? base.divergences : [];
   base.audit = Array.isArray(base.audit) ? base.audit : [];
@@ -5982,6 +6070,8 @@ function createSeedState() {
       releasedBoxes: [],
     },
     reliefDriverAssignments: [],
+    deliveryPlanImports: [],
+    deliveryPlanAliases: [],
     divergences: [],
     audit: [],
     dayClosings: [],
@@ -8037,12 +8127,14 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       unmatchedNames: Array.isArray(importData.unmatchedNames) ? [...new Set(importData.unmatchedNames.filter(Boolean))].slice(0, 200) : [],
       records: Array.isArray(importData.records) ? importData.records.slice(0, 600) : [],
       detailsArchived: false,
+      removedAt: '',
     };
     state.deliveryPlanImports.unshift(newImport);
     state.deliveryPlanImports = state.deliveryPlanImports
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
       .map((item, index) => {
-        if (index < 2) return { ...item, detailsArchived: false };
+        if (item.removedAt) return { ...item, matchedStoreIds: [], unmatchedNames: [], records: [] };
+        if (index < 3) return { ...item, detailsArchived: false };
         if (item.detailsArchived) return { ...item, matchedStoreIds: [], unmatchedNames: [], records: [] };
         return {
           ...item,
@@ -8053,8 +8145,103 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
           records: [],
         };
       })
-      .slice(0, 20);
-    audit('Base de Entregas', 'Planilha importada', `${fileName}: ${newImport.totalRows} registros, ${newImport.uniqueRawStores} lojas únicas, ${newImport.matchedCount} reconhecidas, ${newImport.unmatchedCount} não reconhecidas. Mantidas no máximo 2 planilhas ativas.`);
+      .slice(0, 30);
+    audit('Base de Entregas', 'Planilha importada', `${fileName}: ${newImport.totalRows} registros, ${newImport.uniqueRawStores} lojas únicas, ${newImport.matchedCount} reconhecidas, ${newImport.unmatchedCount} não reconhecidas. Mantidas no máximo 3 planilhas ativas.`);
+    state.lastUpdatedAt = nowIso();
+    return { ok: true, state };
+  }
+
+  if (type === 'LINK_DELIVERY_PLAN_STORE') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Apenas ADM ou CD pode vincular lojas da planilha.' };
+    const rawName = String(payload.rawName || '').trim();
+    const storeId = payload.storeId || '';
+    const store = getStoreById(storeId, state);
+    if (!rawName || !store) return { ok: false, error: 'Selecione a loja correta para vincular.' };
+    const normalizedName = normalizeDeliveryPlanClientName(rawName);
+    const alias = {
+      id: randomId('alias'),
+      rawName,
+      normalizedName,
+      storeId: store.id,
+      storeName: store.name,
+      status: 'linked',
+      createdAt: nowIso(),
+      createdBy: actor.name,
+      createdById: actor.id,
+      updatedAt: nowIso(),
+    };
+    state.deliveryPlanAliases = (state.deliveryPlanAliases || []).filter((item) => item.normalizedName !== normalizedName);
+    state.deliveryPlanAliases.unshift(alias);
+    audit('Base de Entregas', 'Loja da planilha vinculada', `${rawName} foi vinculada a ${store.name} por ${actor.name}.`);
+    state.lastUpdatedAt = nowIso();
+    return { ok: true, state };
+  }
+
+  if (type === 'IGNORE_DELIVERY_PLAN_NAME') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Apenas ADM ou CD pode ignorar lojas da planilha.' };
+    const rawName = String(payload.rawName || '').trim();
+    if (!rawName) return { ok: false, error: 'Nome inválido para ignorar.' };
+    const normalizedName = normalizeDeliveryPlanClientName(rawName);
+    state.deliveryPlanAliases = (state.deliveryPlanAliases || []).filter((item) => item.normalizedName !== normalizedName);
+    state.deliveryPlanAliases.unshift({
+      id: randomId('alias'),
+      rawName,
+      normalizedName,
+      storeId: '',
+      storeName: '',
+      status: 'ignored',
+      createdAt: nowIso(),
+      createdBy: actor.name,
+      createdById: actor.id,
+      updatedAt: nowIso(),
+    });
+    audit('Base de Entregas', 'Nome da planilha ignorado', `${rawName} foi ignorado nesta base e nas próximas importações até novo vínculo.`);
+    state.lastUpdatedAt = nowIso();
+    return { ok: true, state };
+  }
+
+  if (type === 'REMOVE_DELIVERY_PLAN_IMPORT') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Apenas ADM ou CD pode remover planilhas.' };
+    const id = payload.id;
+    const reason = String(payload.reason || '').trim();
+    if (!reason) return { ok: false, error: 'Informe o motivo da remoção.' };
+    const item = (state.deliveryPlanImports || []).find((plan) => plan.id === id);
+    if (!item) return { ok: false, error: 'Planilha não encontrada.' };
+    item.removedAt = nowIso();
+    item.removedBy = actor.name;
+    item.removedById = actor.id;
+    item.removalReason = reason;
+    item.detailsArchived = true;
+    item.matchedStoreIds = [];
+    item.unmatchedNames = [];
+    item.records = [];
+    audit('Base de Entregas', 'Planilha removida da base ativa', `${item.fileName} (${formatDateBR(item.date)}) foi removida por ${actor.name}. Motivo: ${reason}`);
+    state.lastUpdatedAt = nowIso();
+    return { ok: true, state };
+  }
+
+  if (type === 'UPDATE_DELIVERY_PLAN_IMPORT_DATE') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Apenas ADM ou CD pode corrigir data da planilha.' };
+    const id = payload.id;
+    const newDate = payload.date || todayStr();
+    const reason = String(payload.reason || '').trim();
+    if (!reason) return { ok: false, error: 'Informe o motivo da correção de data.' };
+    const item = (state.deliveryPlanImports || []).find((plan) => plan.id === id);
+    if (!item) return { ok: false, error: 'Planilha não encontrada.' };
+    const oldDate = item.date;
+    item.date = newDate;
+    item.dateCorrectedAt = nowIso();
+    item.dateCorrectedBy = actor.name;
+    item.dateCorrectionReason = reason;
+    audit('Base de Entregas', 'Data da planilha corrigida', `${item.fileName}: ${formatDateBR(oldDate)} → ${formatDateBR(newDate)}. Motivo: ${reason}`);
+    state.deliveryPlanImports = state.deliveryPlanImports
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+      .map((plan, index) => {
+        if (plan.removedAt) return { ...plan, matchedStoreIds: [], unmatchedNames: [], records: [] };
+        if (index < 3) return { ...plan, detailsArchived: false };
+        return { ...plan, detailsArchived: true, archivedAt: plan.archivedAt || nowIso(), matchedStoreIds: [], unmatchedNames: [], records: [] };
+      })
+      .slice(0, 30);
     state.lastUpdatedAt = nowIso();
     return { ok: true, state };
   }
@@ -10031,15 +10218,45 @@ function renderBaseEntregas() {
   const date = todayStr();
   const consolidated = getDeliveryPlanConsolidated(date, appState);
   const activeImports = getActiveDeliveryPlanImports(date, appState);
-  const historical = (appState.deliveryPlanImports || [])
-    .filter((item) => item.detailsArchived || item.date !== date)
+  const allImports = (appState.deliveryPlanImports || [])
     .slice()
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-    .slice(0, 8);
+    .slice(0, 20);
   const matchedStores = [...consolidated.storeIds]
     .map((id) => getStoreById(id, appState))
     .filter(Boolean)
     .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+  const storeOptions = getActiveStores(appState)
+    .sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'))
+    .map((store) => `<option value="${store.id}">${escapeHtml(getStoreOptionLabel(store))}</option>`)
+    .join('');
+
+  const renderPlanActions = (item) => `
+    <div class="form-actions compact-actions">
+      ${!item.removedAt && !item.detailsArchived ? `<button type="button" class="btn btn-secondary btn-small" data-plan-date="${item.id}">Corrigir data</button>` : ''}
+      ${!item.removedAt ? `<button type="button" class="btn btn-danger btn-small" data-plan-remove="${item.id}">Remover</button>` : ''}
+    </div>
+  `;
+
+  const renderImportCard = (item) => {
+    const liveSummary = summarizeDeliveryPlanImport(item, appState);
+    const status = item.removedAt ? 'Removida' : (item.detailsArchived ? 'Resumo arquivado' : 'Ativa');
+    const tagClass = item.removedAt ? 'danger' : (item.detailsArchived ? 'warn' : 'ok');
+    return `
+      <div class="list-item">
+        <div class="list-item-head">
+          <strong>${escapeHtml(item.fileName)}</strong>
+          <span class="tag ${tagClass}">${status}</span>
+        </div>
+        <p><strong>Data da base:</strong> ${formatDateBR(item.date)} • ${safeInt(item.totalRows)} registros • ${safeInt(item.uniqueRawStores)} lojas únicas na planilha</p>
+        <p>${safeInt(liveSummary.matchedCount)} reconhecida(s) • ${safeInt(liveSummary.unmatchedCount)} não reconhecida(s) • ${safeInt(item.duplicateCount)} repetição(ões) removida(s)</p>
+        <small class="muted">Importada por ${escapeHtml(item.createdBy || '-')} em ${formatDateTimeBR(item.createdAt)}${item.removedAt ? ` • removida por ${escapeHtml(item.removedBy || '-')} em ${formatDateTimeBR(item.removedAt)}` : ''}</small>
+        ${item.removalReason ? `<p class="muted">Motivo da remoção: ${escapeHtml(item.removalReason)}</p>` : ''}
+        ${item.dateCorrectionReason ? `<p class="muted">Última correção de data: ${escapeHtml(item.dateCorrectionReason)}</p>` : ''}
+        ${renderPlanActions(item)}
+      </div>
+    `;
+  };
 
   return `
     <div class="stack">
@@ -10047,7 +10264,7 @@ function renderBaseEntregas() {
         <div class="section-header">
           <div>
             <h3>Importar base de entregas do dia</h3>
-            <p>Envie até 2 planilhas ativas. A terceira arquiva os detalhes da mais antiga e mantém apenas o resumo.</p>
+            <p>Envie até 3 planilhas ativas. Se entrar uma quarta, a mais antiga fica apenas com resumo para não pesar o sistema.</p>
           </div>
           <div class="tag info">Data operacional: ${formatDateBR(date)}</div>
         </div>
@@ -10071,10 +10288,10 @@ function renderBaseEntregas() {
       </div>
 
       <div class="cards-grid">
-        ${renderMetricCard('Planilhas ativas', `${activeImports.length}/2`, '📎', activeImports.length ? 'success' : 'warning', 'Limite de anexos detalhados')}
+        ${renderMetricCard('Planilhas ativas', `${activeImports.length}/3`, '📎', activeImports.length ? 'success' : 'warning', 'Limite de anexos detalhados')}
         ${renderMetricCard('Lojas únicas previstas', consolidated.storeIds.size, '🏬', consolidated.storeIds.size ? 'success' : 'warning', 'Duplicadas contam uma vez')}
         ${renderMetricCard('Registros lidos', consolidated.totalRows, '📄', 'success', 'Somando planilhas ativas')}
-        ${renderMetricCard('Não reconhecidas', consolidated.unmatchedNames.length, '⚠️', consolidated.unmatchedNames.length ? 'warning' : 'success', 'Precisam de conferência de cadastro')}
+        ${renderMetricCard('Não reconhecidas', consolidated.unmatchedNames.length, '⚠️', consolidated.unmatchedNames.length ? 'warning' : 'success', 'Precisam de vínculo ou cadastro')}
       </div>
 
       <div class="grid-2">
@@ -10085,43 +10302,17 @@ function renderBaseEntregas() {
               <p>Somente estas entram no resumo do Dashboard e nas pendências previstas.</p>
             </div>
           </div>
-          ${activeImports.length ? `
-            <div class="list">
-              ${activeImports.map((item) => `
-                <div class="list-item">
-                  <div class="list-item-head">
-                    <strong>${escapeHtml(item.fileName)}</strong>
-                    ${statusTag('ok')}
-                  </div>
-                  <p>${safeInt(item.matchedCount)} loja(s) reconhecida(s) • ${safeInt(item.unmatchedCount)} não reconhecida(s) • ${safeInt(item.duplicateCount)} repetição(ões) removida(s)</p>
-                  <small class="muted">Importada por ${escapeHtml(item.createdBy || '-')} em ${formatDateTimeBR(item.createdAt)}</small>
-                </div>
-              `).join('')}
-            </div>
-          ` : `<div class="empty">Nenhuma planilha ativa para a data operacional atual. O Dashboard usará a agenda automática.</div>`}
+          ${activeImports.length ? `<div class="list">${activeImports.map(renderImportCard).join('')}</div>` : `<div class="empty">Nenhuma planilha ativa para a data operacional atual. O Dashboard usará a agenda automática.</div>`}
         </div>
 
         <div class="card">
           <div class="section-header">
             <div>
-              <h3>Histórico resumido</h3>
-              <p>Quando uma terceira planilha é anexada, a mais antiga fica aqui apenas com resumo.</p>
+              <h3>Histórico de planilhas anexadas</h3>
+              <p>Veja o que foi anexado, a data de cada base, o status e remova/corrija quando necessário.</p>
             </div>
           </div>
-          ${historical.length ? `
-            <div class="list">
-              ${historical.map((item) => `
-                <div class="list-item">
-                  <div class="list-item-head">
-                    <strong>${escapeHtml(item.fileName)}</strong>
-                    <span class="tag ${item.detailsArchived ? 'warn' : 'info'}">${item.detailsArchived ? 'Resumo arquivado' : formatDateBR(item.date)}</span>
-                  </div>
-                  <p>${safeInt(item.totalRows)} registros • ${safeInt(item.uniqueRawStores)} lojas únicas na planilha • ${safeInt(item.matchedCount)} reconhecidas</p>
-                  <small class="muted">${formatDateBR(item.date)} • ${formatDateTimeBR(item.createdAt)} • ${escapeHtml(item.createdBy || '-')}</small>
-                </div>
-              `).join('')}
-            </div>
-          ` : `<div class="empty">Nenhum histórico resumido ainda.</div>`}
+          ${allImports.length ? `<div class="list">${allImports.map(renderImportCard).join('')}</div>` : `<div class="empty">Nenhuma planilha foi anexada ainda.</div>`}
         </div>
       </div>
 
@@ -10154,13 +10345,31 @@ function renderBaseEntregas() {
           <div class="section-header">
             <div>
               <h3>Lojas não reconhecidas</h3>
-              <p>Conferir nomes ou cadastrar/vincular depois, se necessário.</p>
+              <p>Vincule o nome da planilha a uma loja cadastrada. Nas próximas importações, o sistema reconhece automaticamente.</p>
             </div>
             <div class="badge-count">${consolidated.unmatchedNames.length}</div>
           </div>
           ${consolidated.unmatchedNames.length ? `
             <div class="list">
-              ${consolidated.unmatchedNames.slice(0, 80).map((name) => `<div class="list-item"><strong>${escapeHtml(name)}</strong></div>`).join('')}
+              ${consolidated.unmatchedNames.slice(0, 80).map((name) => `
+                <div class="list-item">
+                  <strong>${escapeHtml(name)}</strong>
+                  <div class="form-grid">
+                    <label>Vincular com loja cadastrada
+                      <select data-plan-alias-store="${escapeHtml(name)}">
+                        <option value="">Selecione a loja</option>
+                        ${storeOptions}
+                      </select>
+                    </label>
+                    <label>Ação rápida
+                      <div class="form-actions compact-actions">
+                        <button type="button" class="btn btn-secondary" data-plan-alias-link="${escapeHtml(name)}">Salvar vínculo</button>
+                        <button type="button" class="btn btn-ghost" data-plan-alias-ignore="${escapeHtml(name)}">Ignorar</button>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              `).join('')}
             </div>
             ${consolidated.unmatchedNames.length > 80 ? `<p class="muted">Mostrando 80 de ${consolidated.unmatchedNames.length} nomes para manter a tela leve.</p>` : ''}
           ` : `<div class="empty">Todas as lojas da base ativa foram reconhecidas.</div>`}
@@ -13505,31 +13714,88 @@ async function parseDeliveryPlanSpreadsheetFile(file, date) {
 
 function bindBaseEntregasEvents() {
   const form = document.getElementById('form-import-delivery-plan');
-  if (!form) return;
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const file = form.file?.files?.[0];
-    const date = form.date?.value || todayStr();
-    if (!file) {
-      showToast('Selecione a planilha para importar.', 'error');
-      return;
-    }
-    try {
-      const importData = await parseDeliveryPlanSpreadsheetFile(file, date);
-      if (!importData.validRows) {
-        showToast(`Nenhum registro da planilha corresponde à data operacional ${formatDateBR(date)}.`, 'error');
+  if (form) {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const file = form.file?.files?.[0];
+      const date = form.date?.value || todayStr();
+      if (!file) {
+        showToast('Selecione a planilha para importar.', 'error');
         return;
       }
-      const result = await persistMutation('IMPORT_DELIVERY_PLAN', {
-        date,
-        fileName: file.name,
-        importData,
-      }, 'Base de entregas importada e consolidada.');
+      try {
+        const importData = await parseDeliveryPlanSpreadsheetFile(file, date);
+        if (!importData.validRows) {
+          showToast(`Nenhum registro da planilha corresponde à data operacional ${formatDateBR(date)}.`, 'error');
+          return;
+        }
+        const result = await persistMutation('IMPORT_DELIVERY_PLAN', {
+          date,
+          fileName: file.name,
+          importData,
+        }, 'Base de entregas importada e consolidada.');
+        if (result.ok) render();
+      } catch (error) {
+        console.error('Erro ao importar planilha:', error);
+        showToast(error.message || 'Não foi possível ler a planilha.', 'error');
+      }
+    });
+  }
+
+  document.querySelectorAll('[data-plan-alias-link]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const rawName = button.dataset.planAliasLink || '';
+      const row = button.closest('.list-item');
+      const select = row?.querySelector('select[data-plan-alias-store]');
+      const storeId = select?.value || '';
+      if (!rawName || !storeId) {
+        showToast('Selecione a loja cadastrada para criar o vínculo.', 'error');
+        return;
+      }
+      const result = await persistMutation('LINK_DELIVERY_PLAN_STORE', { rawName, storeId }, 'Loja vinculada à planilha.');
       if (result.ok) render();
-    } catch (error) {
-      console.error('Erro ao importar planilha:', error);
-      showToast(error.message || 'Não foi possível ler a planilha.', 'error');
-    }
+    });
+  });
+
+  document.querySelectorAll('[data-plan-alias-ignore]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const rawName = button.dataset.planAliasIgnore || '';
+      if (!rawName) return;
+      if (!window.confirm(`Ignorar "${rawName}" nesta base e nas próximas importações?`)) return;
+      const result = await persistMutation('IGNORE_DELIVERY_PLAN_NAME', { rawName }, 'Nome ignorado na base de entregas.');
+      if (result.ok) render();
+    });
+  });
+
+  document.querySelectorAll('[data-plan-remove]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = button.dataset.planRemove;
+      const reason = window.prompt('Informe o motivo da remoção desta planilha da base ativa:');
+      if (!reason || !reason.trim()) {
+        showToast('A remoção precisa de motivo para auditoria.', 'error');
+        return;
+      }
+      const result = await persistMutation('REMOVE_DELIVERY_PLAN_IMPORT', { id, reason: reason.trim() }, 'Planilha removida da base ativa.');
+      if (result.ok) render();
+    });
+  });
+
+  document.querySelectorAll('[data-plan-date]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = button.dataset.planDate;
+      const newDate = window.prompt('Informe a nova data da base no formato AAAA-MM-DD:', todayStr());
+      if (!newDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDate.trim())) {
+        showToast('Informe a data no formato AAAA-MM-DD.', 'error');
+        return;
+      }
+      const reason = window.prompt('Informe o motivo da correção da data:');
+      if (!reason || !reason.trim()) {
+        showToast('A correção de data precisa de motivo para auditoria.', 'error');
+        return;
+      }
+      const result = await persistMutation('UPDATE_DELIVERY_PLAN_IMPORT_DATE', { id, date: newDate.trim(), reason: reason.trim() }, 'Data da planilha corrigida.');
+      if (result.ok) render();
+    });
   });
 }
 
