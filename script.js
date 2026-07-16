@@ -4050,6 +4050,7 @@ const VIEW_META = {
   dashboard: { title: 'Dashboard', subtitle: 'Visão geral da operação em tempo real' },
   baseEntregas: { title: 'Base de Entregas', subtitle: 'Importação de planilhas para definir lojas previstas do dia' },
   saidas: { title: 'Saídas do CD', subtitle: 'Lançamento de caixas enviadas por loja e rota' },
+  separadores: { title: 'Separadores', subtitle: 'Cadastro rápido de separadores e lojas de folhagens' },
   resumoEnvios: { title: 'Resumo de Envios', subtitle: 'Resumo das caixas lançadas pelo CD para as lojas' },
   entregasMotorista: { title: 'Entrega do Motorista', subtitle: 'Validação do total deixado na loja pelo motorista' },
   recebimentos: { title: 'Recebimento na Loja', subtitle: 'Confirmação do promotor com comparação automática' },
@@ -4077,6 +4078,7 @@ const NAV_ITEMS = [
   { key: 'dashboard', label: 'Dashboard', roles: ['admin', 'cd', 'driver', 'promoter', 'viewer'] },
   { key: 'baseEntregas', label: 'Base de Entregas', roles: ['admin', 'cd'] },
   { key: 'saidas', label: 'Saídas do CD', roles: ['admin', 'cd'] },
+  { key: 'separadores', label: 'Separadores', roles: ['admin', 'cd'] },
   { key: 'resumoEnvios', label: 'Resumo de Envios', roles: ['admin', 'cd'] },
   { key: 'entregasMotorista', label: 'Entrega do Motorista', roles: ['admin', 'driver'] },
   { key: 'recebimentos', label: 'Recebimento na Loja', roles: ['admin', 'promoter'] },
@@ -4102,7 +4104,7 @@ const NAV_ITEMS = [
 
 const MOBILE_PRIORITY_BY_ROLE = {
   admin: ['dashboard', 'pendencias', 'fechamento', 'divergencias'],
-  cd: ['dashboard', 'baseEntregas', 'saidas', 'retornos'],
+  cd: ['dashboard', 'baseEntregas', 'saidas', 'separadores', 'retornos'],
   driver: ['dashboard', 'entregasMotorista', 'recolhimentos', 'caixasOcupadas'],
   promoter: ['dashboard', 'recebimentos', 'caixasLiberadas', 'pendencias'],
   viewer: ['dashboard', 'estoque', 'divergencias'],
@@ -4150,7 +4152,7 @@ const PUBLIC_DASHBOARD_USER = {
 };
 let currentView = 'dashboard';
 let backendMode = 'local';
-const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '' };
+const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '', separatorEditorId: '', separatorEditorNetwork: '', separatorEditorSearch: '', folhagensSeparatorId: '', folhagensSeparatorDate: todayStr() };
 let firebaseDb = null;
 let firebaseRootRef = null;
 let unsubscribeFirebase = null;
@@ -4428,8 +4430,9 @@ function getSeparatorLinkForStore(store) {
   return SEPARATOR_STORE_LINKS.find((item) => item.storeKey === key) || null;
 }
 
-function getStoreSeparator(store) {
-  return String(store?.separator || store?.separatorName || getSeparatorLinkForStore(store)?.separator || '').trim();
+function getStoreSeparator(store, state = appState) {
+  const configured = store?.id ? getSeparatorForStoreId(store.id, state) : null;
+  return String(configured?.name || store?.separator || store?.separatorName || getSeparatorLinkForStore(store)?.separator || '').trim();
 }
 
 function storeNeedsCommercialConciliation(store) {
@@ -4439,10 +4442,9 @@ function storeNeedsCommercialConciliation(store) {
 }
 
 function uniqueSeparators(state = appState) {
-  return [...new Set(getActiveStores(state)
-    .map((store) => getStoreSeparator(store))
-    .filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const configured = getActiveSeparators(state).map((item) => item.name).filter(Boolean);
+  const fallback = getActiveStores(state).map((store) => getStoreSeparator(store, state)).filter(Boolean);
+  return [...new Set([...configured, ...fallback])].sort((a, b) => a.localeCompare(b, 'pt-BR'));
 }
 
 function buildSeparatorOptions(selectedValue = '', state = appState) {
@@ -4454,6 +4456,53 @@ function buildSeparatorOptions(selectedValue = '', state = appState) {
 function canUseSeparatorFilter(user) {
   return !user || user.role === 'admin' || canUserLaunchBoxType(user, 'folhagens');
 }
+
+
+function normalizeSeparatorRecord(item, state = appState) {
+  const name = String(item?.name || item?.separator || '').trim();
+  const id = item?.id || `sep_${slugId(name || 'separador')}`;
+  const activeStoreIds = new Set(getActiveStores(state).map((store) => store.id));
+  const storeIds = Array.isArray(item?.storeIds)
+    ? [...new Set(item.storeIds.filter((storeId) => activeStoreIds.has(storeId)))]
+    : [];
+  return { id, name: name || 'Separador', active: item?.active !== false, storeIds, createdAt: item?.createdAt || nowIso(), createdBy: item?.createdBy || 'Sistema', createdById: item?.createdById || '', updatedAt: item?.updatedAt || item?.createdAt || nowIso(), updatedBy: item?.updatedBy || item?.createdBy || 'Sistema', updatedById: item?.updatedById || item?.createdById || '' };
+}
+function buildDefaultSeparatorsFromStores(state = appState) {
+  const map = new Map();
+  getActiveStores(state).forEach((store) => {
+    const name = String(store?.separator || store?.separatorName || getSeparatorLinkForStore(store)?.separator || '').trim();
+    if (!name) return;
+    const key = normalizeText(name);
+    if (!map.has(key)) map.set(key, { id: `sep_${slugId(name)}`, name, active: true, storeIds: [], createdAt: nowIso(), createdBy: 'Sistema', createdById: 'system', updatedAt: nowIso(), updatedBy: 'Sistema', updatedById: 'system' });
+    const record = map.get(key);
+    if (!record.storeIds.includes(store.id)) record.storeIds.push(store.id);
+  });
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+}
+function ensureSeparatorSeedAndShape(state = appState) {
+  state.separators = Array.isArray(state.separators) ? state.separators : [];
+  if (!state.separators.length) state.separators = buildDefaultSeparatorsFromStores(state);
+  const seen = new Set();
+  state.separators = state.separators.map((item) => normalizeSeparatorRecord(item, state)).filter((item) => {
+    const key = normalizeText(item.name);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+}
+function getActiveSeparators(state = appState) { ensureSeparatorSeedAndShape(state); return (state.separators || []).filter((item) => item.active !== false); }
+function getSeparatorById(separatorId, state = appState) { return getActiveSeparators(state).find((item) => item.id === separatorId) || null; }
+function getSeparatorForStoreId(storeId, state = appState) { return getActiveSeparators(state).find((item) => Array.isArray(item.storeIds) && item.storeIds.includes(storeId)) || null; }
+function getStoresForSeparator(separatorId, state = appState) {
+  const separator = getSeparatorById(separatorId, state);
+  if (!separator) return [];
+  const ids = new Set(separator.storeIds || []);
+  return getActiveStores(state).filter((store) => ids.has(store.id)).sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+}
+function buildSeparatorSelectOptions(selectedValue = '', state = appState) {
+  return getActiveSeparators(state).map((separator) => `<option value="${escapeHtml(separator.id)}" ${separator.id === selectedValue ? 'selected' : ''}>${escapeHtml(separator.name)}</option>`).join('');
+}
+function canUseFolhagensBulkLaunch(user = currentUser) { return !!user && ['admin', 'cd'].includes(user.role) && canUserLaunchBoxType(user, 'folhagens'); }
 
 function enrichStoreCommercialLinks(state) {
   (state?.stores || []).forEach((store) => {
@@ -4969,6 +5018,7 @@ function applyRouteDataset(base) {
   base.routes = seedData.routes;
   base.stores = seedData.stores;
   enrichStoreCommercialLinks(base);
+  ensureSeparatorSeedAndShape(base);
   normalizePromoterUserNames(base);
   base.storeStocks = nextStocks;
   base.routeDatasetVersion = ROUTE_DATASET_VERSION;
@@ -5883,6 +5933,7 @@ function ensureStateShape(state) {
   base.reliefDriverAssignments = Array.isArray(base.reliefDriverAssignments) ? base.reliefDriverAssignments : [];
   base.deliveryPlanImports = Array.isArray(base.deliveryPlanImports) ? base.deliveryPlanImports : [];
   base.deliveryPlanAliases = Array.isArray(base.deliveryPlanAliases) ? base.deliveryPlanAliases : [];
+  base.separators = Array.isArray(base.separators) ? base.separators : [];
 
   base.movements.outbounds = base.movements.outbounds.map((item) => ({
     ...item,
@@ -6020,6 +6071,7 @@ function ensureStateShape(state) {
   base.stores = Array.isArray(base.stores) && base.stores.length ? base.stores : seedData.stores;
   base.routes = Array.isArray(base.routes) && base.routes.length ? base.routes : seedData.routes;
   enrichStoreCommercialLinks(base);
+  ensureSeparatorSeedAndShape(base);
   normalizePromoterUserNames(base);
 
   base.divergences = base.divergences.map((div) => {
@@ -6115,6 +6167,7 @@ function createSeedState() {
     reliefDriverAssignments: [],
     deliveryPlanImports: [],
     deliveryPlanAliases: [],
+    separators: [],
     divergences: [],
     audit: [],
     dayClosings: [],
@@ -7135,6 +7188,81 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       createdAt: nowIso(),
     });
     audit('Ponto de Apoio', action === 'drop' ? 'Caixas deixadas' : 'Caixas recolhidas', `${driver.name} ${action === 'drop' ? 'deixou' : 'recolheu'} ${totalQty} caixas em ${store.name}.`);
+  }
+
+
+  if (type === 'CREATE_SEPARATOR') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode cadastrar separadores.' };
+    const name = String(payload.name || '').trim();
+    if (name.length < 2) return { ok: false, error: 'Informe o nome do separador.' };
+    ensureSeparatorSeedAndShape(state);
+    if ((state.separators || []).some((item) => normalizeText(item.name) === normalizeText(name) && item.active !== false)) return { ok: false, error: 'Já existe um separador com esse nome.' };
+    state.separators.unshift({ id: `sep_${slugId(name)}_${Math.random().toString(36).slice(2, 6)}`, name, active: true, storeIds: [], createdAt: nowIso(), createdBy: actor.name, createdById: actor.id, updatedAt: nowIso(), updatedBy: actor.name, updatedById: actor.id });
+    audit('Separadores', 'Separador criado', `${actor.name} criou o separador ${name}.`);
+  }
+
+  if (type === 'UPDATE_SEPARATOR_STORES') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode salvar lojas no separador.' };
+    ensureSeparatorSeedAndShape(state);
+    const separator = state.separators.find((item) => item.id === payload.separatorId && item.active !== false);
+    if (!separator) return { ok: false, error: 'Selecione um separador válido.' };
+    const validStoreIds = new Set(getActiveStores(state).map((store) => store.id));
+    const storeIds = [...new Set((payload.storeIds || []).filter((storeId) => validStoreIds.has(storeId)))];
+    const previousCount = (separator.storeIds || []).length;
+    separator.storeIds = storeIds;
+    separator.updatedAt = nowIso();
+    separator.updatedBy = actor.name;
+    separator.updatedById = actor.id;
+    audit('Separadores', 'Lojas do separador atualizadas', `${actor.name} atualizou ${separator.name}: antes ${previousCount} loja(s), agora ${storeIds.length} loja(s).`);
+  }
+
+  if (type === 'BULK_CREATE_FOLHAGENS_OUTBOUNDS') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode lançar folhagens.' };
+    if (!canUserLaunchBoxType(actor, 'folhagens')) return { ok: false, error: 'Seu usuário não tem permissão para lançar folhagens.' };
+    const date = payload.date || todayStr();
+    const separator = getSeparatorById(payload.separatorId, state);
+    if (!separator) return { ok: false, error: 'Selecione um separador válido.' };
+    const normalizedEntries = (Array.isArray(payload.entries) ? payload.entries : []).map((entry) => ({ storeId: entry.storeId, qty: safeInt(entry.folhagens) })).filter((entry) => entry.storeId && entry.qty > 0);
+    if (!normalizedEntries.length) return { ok: false, error: 'Informe pelo menos uma quantidade de folhagens.' };
+    const separatorStoreIds = new Set(separator.storeIds || []);
+    if (normalizedEntries.find((entry) => !separatorStoreIds.has(entry.storeId))) return { ok: false, error: 'Uma das lojas informadas não pertence ao separador selecionado.' };
+    const conflictStores = normalizedEntries.filter((entry) => safeInt(getActiveOutboundForStoreDate(entry.storeId, date, state)?.qty?.folhagens) > 0).map((entry) => getStoreById(entry.storeId, state)?.name || entry.storeId);
+    if (conflictStores.length) return { ok: false, error: `Já existe lançamento de folhagens para: ${conflictStores.slice(0, 5).join(', ')}${conflictStores.length > 5 ? '...' : ''}. Use Editar em Saídas recentes para corrigir.` };
+    const totalQty = normalizedEntries.reduce((sum, entry) => sum + entry.qty, 0);
+    if (safeInt(getCdStock(state).folhagens) < totalQty) return { ok: false, error: 'O CD não possui folhagens suficientes para este lançamento em massa.' };
+    for (const entry of normalizedEntries) {
+      const store = getStoreById(entry.storeId, state);
+      if (!store) return { ok: false, error: 'Uma das lojas selecionadas não foi encontrada.' };
+      const routeId = getEffectiveRoute(store.id, date, state);
+      if (!routeId) return { ok: false, error: `${store.name} não possui rota cadastrada.` };
+      const driverId = getEffectiveDriver(routeId, date, store.id, state);
+      if (!driverId) return { ok: false, error: `${store.name} não possui motorista vinculado na rota.` };
+    }
+    state.cdStock = subQty(getCdStock(state), { folhagens: totalQty, bandejas: 0 });
+    for (const entry of normalizedEntries) {
+      const store = getStoreById(entry.storeId, state);
+      const routeId = getEffectiveRoute(store.id, date, state);
+      const driverId = getEffectiveDriver(routeId, date, store.id, state);
+      const qty = { folhagens: entry.qty, bandejas: 0 };
+      const existingOutbound = getActiveOutboundForStoreDate(store.id, date, state);
+      if (existingOutbound) {
+        if (existingOutbound.driverDeliveryId || existingOutbound.receiptId || existingOutbound.goianiaTransferId) return { ok: false, error: `${store.name} já teve validação posterior. Estorne a validação antes de complementar a saída.` };
+        existingOutbound.cdLaunches = normalizeOutboundCdLaunches(existingOutbound);
+        existingOutbound.cdLaunches.push(buildCdLaunchRecord(qty, actor, date));
+        existingOutbound.qty = addQty(existingOutbound.qty, qty);
+        existingOutbound.routeId = routeId;
+        existingOutbound.driverId = driverId;
+        existingOutbound.network = inferStoreNetwork(store);
+        existingOutbound.separator = separator.name;
+        existingOutbound.updatedAt = nowIso();
+        existingOutbound.updatedBy = actor.name;
+        existingOutbound.updatedById = actor.id;
+      } else {
+        const launchRecord = buildCdLaunchRecord(qty, actor, date);
+        state.movements.outbounds.unshift({ id: randomId('out'), date, routeId, driverId, storeId: store.id, network: inferStoreNetwork(store), separator: separator.name, qty, cdLaunches: [launchRecord], status: 'aguardando_loja', createdBy: actor.name, createdById: actor.id, createdAt: nowIso(), receiptId: null });
+      }
+    }
+    audit('Saídas do CD', 'Folhagens em massa por separador', `${actor.name} lançou ${totalQty} caixas de folhagens para ${normalizedEntries.length} loja(s) do separador ${separator.name}.`);
   }
 
   if (type === 'CREATE_OUTBOUND') {
@@ -8574,6 +8702,8 @@ function renderReliefDriverRouteSelection() {
             <button type="submit" class="btn btn-primary">Confirmar rota do dia</button>
           </div>
         </form>
+
+        ${canUseFolhagensBulkLaunch(currentUser) ? renderFolhagensPorSeparadorCard() : ''}
       </div>
 
       <div class="card">
@@ -8602,6 +8732,29 @@ function renderReliefDriverRouteSelection() {
 function bindReliefDriverRouteEvents() {
   const form = document.getElementById('form-rota-folguista');
   if (!form) return;
+
+  if (bulkForm) {
+    const refreshBulkSummary = () => {
+      const summary = document.getElementById('folhagens-separador-resumo');
+      if (!summary) return;
+      const inputs = Array.from(bulkForm.querySelectorAll('input[name^="folhagens_"]:not(:disabled)'));
+      const filled = inputs.filter((input) => safeInt(input.value) > 0);
+      const total = filled.reduce((sum, input) => sum + safeInt(input.value), 0);
+      summary.innerHTML = `Lojas preenchidas: <strong>${filled.length}</strong> • Total de folhagens: <strong>${total}</strong> caixa(s).`;
+    };
+    bulkForm.separatorId?.addEventListener('change', () => { viewFilters.folhagensSeparatorId = bulkForm.separatorId.value || ''; viewFilters.folhagensSeparatorDate = bulkForm.date?.value || todayStr(); scheduleRender(); });
+    bulkForm.date?.addEventListener('change', () => { viewFilters.folhagensSeparatorDate = bulkForm.date.value || todayStr(); scheduleRender(); });
+    bulkForm.querySelectorAll('input[name^="folhagens_"]').forEach((input) => input.addEventListener('input', refreshBulkSummary));
+    refreshBulkSummary();
+    bulkForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const entries = Array.from(bulkForm.querySelectorAll('input[name^="folhagens_"]:not(:disabled)')).map((input) => ({ storeId: input.name.replace('folhagens_', ''), folhagens: safeInt(input.value) })).filter((entry) => entry.folhagens > 0);
+      if (!entries.length) { showToast('Informe pelo menos uma quantidade de folhagens.', 'error'); return; }
+      const result = await persistMutation('BULK_CREATE_FOLHAGENS_OUTBOUNDS', { date: bulkForm.date?.value || todayStr(), separatorId: bulkForm.separatorId?.value || '', entries }, 'Lançamentos de folhagens salvos com sucesso.');
+      if (result.ok) render();
+    });
+  }
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const route = getRouteById(form.routeId.value);
@@ -8802,6 +8955,7 @@ function renderCurrentView() {
     dashboard: renderDashboard,
     baseEntregas: renderBaseEntregas,
     saidas: renderSaidas,
+    separadores: renderSeparadores,
     resumoEnvios: renderResumoEnvios,
     entregasMotorista: renderEntregasMotorista,
     recebimentos: renderRecebimentos,
@@ -10766,6 +10920,35 @@ function renderResumoEnvios() {
       </div>
     </div>
   `;
+}
+
+
+function renderFolhagensPorSeparadorCard() {
+  const date = viewFilters.folhagensSeparatorDate || todayStr();
+  const separators = getActiveSeparators(appState);
+  const selectedId = viewFilters.folhagensSeparatorId || separators[0]?.id || '';
+  const selected = getSeparatorById(selectedId, appState);
+  const stores = selected ? getStoresForSeparator(selected.id, appState) : [];
+  const rows = stores.map((store) => {
+    const existing = getActiveOutboundForStoreDate(store.id, date, appState);
+    const existingFolhagens = safeInt(existing?.qty?.folhagens || 0);
+    const canLaunch = existingFolhagens <= 0;
+    const routeId = getEffectiveRoute(store.id, date);
+    const driverId = routeId ? getEffectiveDriver(routeId, date, store.id) : null;
+    return `<tr><td><strong>${escapeHtml(formatStoreNameForUser(store.name))}</strong><br><small class="muted">${escapeHtml(inferStoreNetwork(store))} • ${escapeHtml(getRouteById(routeId)?.name || 'Sem rota')} • ${escapeHtml(getUserById(driverId)?.name || 'Sem motorista')}</small></td><td class="center">${existingFolhagens > 0 ? `<span class="tag warn">Já lançado: ${existingFolhagens}</span>` : `<span class="tag ok">Livre</span>`}</td><td style="width:190px"><input type="number" min="0" step="1" name="folhagens_${store.id}" value="0" ${canLaunch ? '' : 'disabled'} /></td></tr>`;
+  }).join('');
+  return `<div class="helper-card" style="margin-top:18px"><div class="section-header"><div><h3>Lançamento de folhagens por separador</h3><p>Selecione o separador, preencha as lojas dele e salve tudo de uma vez.</p></div></div><form id="form-folhagens-separador" class="stack"><div class="form-grid"><label>Data da entrega<input type="date" name="date" value="${date}" required /></label><label>Separador<select name="separatorId" required><option value="">Selecione</option>${buildSeparatorSelectOptions(selectedId)}</select></label></div>${selected ? `<div class="helper-card compact small">Separador: <strong>${escapeHtml(selected.name)}</strong> • Lojas vinculadas: <strong>${stores.length}</strong></div><div class="table-wrap"><table><thead><tr><th>Loja</th><th>Status folhagens</th><th>Caixas de folhagens</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="center muted">Nenhuma loja vinculada a este separador.</td></tr>`}</tbody></table></div><div id="folhagens-separador-resumo" class="helper-card compact small">Preencha as quantidades para ver o total.</div><div class="form-actions"><button type="submit" class="btn btn-primary">Salvar folhagens do separador</button></div>` : `<div class="helper-card compact small">Cadastre um separador na aba Separadores para usar o lançamento em massa.</div>`}</form></div>`;
+}
+
+function renderSeparadores() {
+  const separators = getActiveSeparators(appState);
+  const selectedId = viewFilters.separatorEditorId || separators[0]?.id || '';
+  const selected = getSeparatorById(selectedId, appState);
+  const network = viewFilters.separatorEditorNetwork || '';
+  const search = normalizeText(viewFilters.separatorEditorSearch || '');
+  const selectedStoreIds = new Set(selected?.storeIds || []);
+  const stores = getActiveStores(appState).filter((store) => !network || inferStoreNetwork(store) === network).filter((store) => !search || normalizeText(`${store.name} ${inferStoreNetwork(store)} ${getStoreUnitName(store)}`).includes(search)).sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
+  return `<div class="grid-2"><div class="card stack"><div class="section-header"><div><h3>Cadastrar separador</h3><p>Crie o nome do separador para depois salvar as lojas dele.</p></div></div><form id="form-create-separator" class="stack"><label>Nome do separador<input type="text" name="name" placeholder="Ex.: Separador 1, Anderson, Caio..." required /></label><div class="form-actions"><button type="submit" class="btn btn-primary">Salvar separador</button></div></form><div class="section-header" style="margin-top:14px"><div><h3>Separadores cadastrados</h3><p>${separators.length} separador(es) ativo(s).</p></div></div><div class="list">${separators.length ? separators.map((item) => `<button type="button" class="list-item btn-select-separator ${item.id === selectedId ? 'active' : ''}" data-id="${item.id}"><div class="list-item-head"><strong>${escapeHtml(item.name)}</strong><span class="tag info">${(item.storeIds || []).length} loja(s)</span></div></button>`).join('') : `<div class="helper-card compact small">Nenhum separador cadastrado.</div>`}</div></div><div class="card stack"><div class="section-header"><div><h3>Salvar lojas no separador</h3><p>Marque as lojas que pertencem ao separador selecionado.</p></div></div>${selected ? `<form id="form-separator-stores" class="stack"><label>Separador<select name="separatorId" required>${buildSeparatorSelectOptions(selectedId)}</select></label><div class="form-grid"><label>Rede<select name="network"><option value="">Todas as redes</option>${buildNetworkOptions(network)}</select></label><label>Buscar loja<input type="search" name="search" value="${escapeHtml(viewFilters.separatorEditorSearch || '')}" placeholder="Digite o nome da loja" /></label></div><div class="helper-card compact small">Selecionado: <strong>${escapeHtml(selected.name)}</strong> • Lojas salvas nele: <strong>${selectedStoreIds.size}</strong></div><div class="table-wrap" style="max-height:520px; overflow:auto"><table><thead><tr><th style="width:60px">Usar</th><th>Loja</th><th>Rede</th></tr></thead><tbody>${stores.map((store) => `<tr><td><input type="checkbox" name="storeIds" value="${store.id}" ${selectedStoreIds.has(store.id) ? 'checked' : ''} /></td><td><strong>${escapeHtml(formatStoreNameForUser(store.name))}</strong></td><td>${escapeHtml(inferStoreNetwork(store))}</td></tr>`).join('') || `<tr><td colspan="3" class="center muted">Nenhuma loja encontrada.</td></tr>`}</tbody></table></div><div class="form-actions"><button type="submit" class="btn btn-primary">Salvar lojas no separador</button></div></form>` : `<div class="helper-card compact small">Cadastre ou selecione um separador para vincular lojas.</div>`}</div></div>`;
 }
 
 function renderSaidas() {
@@ -13712,6 +13895,7 @@ function bindViewEvents() {
   });
   if (currentView === 'baseEntregas') bindBaseEntregasEvents();
   if (currentView === 'saidas') bindSaidasEvents();
+  if (currentView === 'separadores') bindSeparadoresEvents();
   if (currentView === 'resumoEnvios') bindResumoEnviosEvents();
   if (currentView === 'entregasMotorista') bindEntregasMotoristaEvents();
   if (currentView === 'recebimentos') bindRecebimentosEvents();
@@ -13932,6 +14116,32 @@ function bindResumoEnviosEvents() {
   });
 }
 
+
+function bindSeparadoresEvents() {
+  const createForm = document.getElementById('form-create-separator');
+  const saveStoresForm = document.getElementById('form-separator-stores');
+  createForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const result = await persistMutation('CREATE_SEPARATOR', { name: createForm.name?.value || '' }, 'Separador cadastrado com sucesso.');
+    if (result.ok) createForm.reset();
+  });
+  document.querySelectorAll('.btn-select-separator').forEach((button) => {
+    button.addEventListener('click', () => { viewFilters.separatorEditorId = button.dataset.id || ''; scheduleRender(); });
+  });
+  if (saveStoresForm) {
+    saveStoresForm.separatorId?.addEventListener('change', () => { viewFilters.separatorEditorId = saveStoresForm.separatorId.value || ''; scheduleRender(); });
+    saveStoresForm.network?.addEventListener('change', () => { viewFilters.separatorEditorNetwork = saveStoresForm.network.value || ''; scheduleRender(); });
+    saveStoresForm.search?.addEventListener('input', debounce(() => { viewFilters.separatorEditorSearch = saveStoresForm.search.value || ''; scheduleRender(); }, 250));
+    saveStoresForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const separatorId = saveStoresForm.separatorId?.value || viewFilters.separatorEditorId || '';
+      const storeIds = Array.from(saveStoresForm.querySelectorAll('input[name="storeIds"]:checked')).map((input) => input.value);
+      const result = await persistMutation('UPDATE_SEPARATOR_STORES', { separatorId, storeIds }, 'Lojas salvas no separador.');
+      if (result.ok) viewFilters.separatorEditorId = separatorId;
+    });
+  }
+}
+
 function bindSaidasEvents() {
   const form = document.getElementById('form-saida');
   const networkSelect = document.getElementById('saida-network');
@@ -13939,6 +14149,7 @@ function bindSaidasEvents() {
   const storeSelect = document.getElementById('saida-store');
   const infoBox = document.getElementById('saida-rota-info');
   const resetBtn = document.getElementById('btn-reset-saida');
+  const bulkForm = document.getElementById('form-folhagens-separador');
 
   if (!form || !storeSelect) return;
 
@@ -14003,7 +14214,7 @@ function bindSaidasEvents() {
   storeSelect.addEventListener('change', refreshRouteInfo);
   form.querySelector('[name="date"]').addEventListener('change', refreshStoreOptions);
 
-  resetBtn.addEventListener('click', () => {
+  resetBtn?.addEventListener('click', () => {
     form.reset();
     form.querySelector('[name="date"]').value = todayStr();
     refreshStoreOptions();
