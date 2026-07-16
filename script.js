@@ -10919,14 +10919,126 @@ function renderFolhagensPorSeparadorCard() {
 }
 
 function renderSeparadores() {
-  const separators = getActiveSeparators(appState);
-  const selectedId = viewFilters.separatorEditorId || separators[0]?.id || '';
-  const selected = getSeparatorById(selectedId, appState);
-  const network = viewFilters.separatorEditorNetwork || '';
-  const search = normalizeText(viewFilters.separatorEditorSearch || '');
-  const selectedStoreIds = new Set(selected?.storeIds || []);
-  const stores = getActiveStores(appState).filter((store) => !network || inferStoreNetwork(store) === network).filter((store) => !search || normalizeText(`${store.name} ${inferStoreNetwork(store)} ${getStoreUnitName(store)}`).includes(search)).sort((a, b) => getStoreOptionLabel(a).localeCompare(getStoreOptionLabel(b), 'pt-BR'));
-  return `<div class="grid-2"><div class="card stack"><div class="section-header"><div><h3>Cadastrar separador</h3><p>Crie o nome do separador para depois salvar as lojas dele.</p></div></div><form id="form-create-separator" class="stack"><label>Nome do separador<input type="text" name="name" placeholder="Ex.: Separador 1, Anderson, Caio..." required /></label><div class="form-actions"><button type="submit" class="btn btn-primary">Salvar separador</button></div></form><div class="section-header" style="margin-top:14px"><div><h3>Separadores cadastrados</h3><p>${separators.length} separador(es) ativo(s).</p></div></div><div class="list">${separators.length ? separators.map((item) => `<button type="button" class="list-item btn-select-separator ${item.id === selectedId ? 'active' : ''}" data-id="${item.id}"><div class="list-item-head"><strong>${escapeHtml(item.name)}</strong><span class="tag info">${(item.storeIds || []).length} loja(s)</span></div></button>`).join('') : `<div class="helper-card compact small">Nenhum separador cadastrado.</div>`}</div></div><div class="card stack"><div class="section-header"><div><h3>Salvar lojas no separador</h3><p>Marque as lojas que pertencem ao separador selecionado.</p></div></div>${selected ? `<form id="form-separator-stores" class="stack"><label>Separador<select name="separatorId" required>${buildSeparatorSelectOptions(selectedId)}</select></label><div class="form-grid"><label>Rede<select name="network"><option value="">Todas as redes</option>${buildNetworkOptions(network)}</select></label><label>Buscar loja<input type="search" name="search" value="${escapeHtml(viewFilters.separatorEditorSearch || '')}" placeholder="Digite o nome da loja" /></label></div><div class="helper-card compact small">Selecionado: <strong>${escapeHtml(selected.name)}</strong> • Lojas salvas nele: <strong>${selectedStoreIds.size}</strong></div><div class="table-wrap" style="max-height:520px; overflow:auto"><table><thead><tr><th style="width:60px">Usar</th><th>Loja</th><th>Rede</th></tr></thead><tbody>${stores.map((store) => `<tr><td><input type="checkbox" name="storeIds" value="${store.id}" ${selectedStoreIds.has(store.id) ? 'checked' : ''} /></td><td><strong>${escapeHtml(formatStoreNameForUser(store.name))}</strong></td><td>${escapeHtml(inferStoreNetwork(store))}</td></tr>`).join('') || `<tr><td colspan="3" class="center muted">Nenhuma loja encontrada.</td></tr>`}</tbody></table></div><div class="form-actions"><button type="submit" class="btn btn-primary">Salvar lojas no separador</button></div></form>` : `<div class="helper-card compact small">Cadastre ou selecione um separador para vincular lojas.</div>`}</div></div>`;
+  try {
+    try { ensureSeparatorSeedAndShape(appState); } catch (seedError) { console.warn('Falha ao preparar separadores:', seedError); }
+
+    const separators = Array.isArray(appState.separators)
+      ? appState.separators.filter((item) => item && item.active !== false)
+      : [];
+    const selectedId = viewFilters.separatorEditorId || separators[0]?.id || '';
+    const selected = separators.find((item) => item.id === selectedId) || separators[0] || null;
+    if (selected && viewFilters.separatorEditorId !== selected.id) viewFilters.separatorEditorId = selected.id;
+
+    const storesList = Array.isArray(appState.stores) ? appState.stores.filter(isActiveStore) : [];
+    const getNetworkSafe = (store) => {
+      try { return inferStoreNetwork(store); } catch (error) { return String(store?.network || store?.rede || 'Sem rede').replace(/^\s*\d+\s*[-–]\s*/g, '') || 'Sem rede'; }
+    };
+    const getStoreNameSafe = (store) => {
+      try { return formatStoreNameForUser(store?.name || ''); } catch (error) { return String(store?.name || 'Loja sem nome'); }
+    };
+    const network = viewFilters.separatorEditorNetwork || '';
+    const searchRaw = viewFilters.separatorEditorSearch || '';
+    const search = normalizeText(searchRaw);
+    const selectedStoreIds = new Set(Array.isArray(selected?.storeIds) ? selected.storeIds : []);
+    const networks = [...new Set(storesList.map(getNetworkSafe).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    const networkOptions = networks.map((item) => `<option value="${escapeHtml(item)}" ${item === network ? 'selected' : ''}>${escapeHtml(item)}</option>`).join('');
+    const stores = storesList
+      .filter((store) => !network || getNetworkSafe(store) === network)
+      .filter((store) => !search || normalizeText(`${store?.name || ''} ${getNetworkSafe(store)}`).includes(search))
+      .sort((a, b) => getStoreNameSafe(a).localeCompare(getStoreNameSafe(b), 'pt-BR'));
+    const separatorOptions = separators.map((separator) => `<option value="${escapeHtml(separator.id)}" ${separator.id === selected?.id ? 'selected' : ''}>${escapeHtml(separator.name || 'Separador')}</option>`).join('');
+
+    return `
+      <div class="grid-2">
+        <div class="card stack">
+          <div class="section-header">
+            <div>
+              <h3>Cadastrar separador</h3>
+              <p>Cadastre apenas o nome do separador.</p>
+            </div>
+          </div>
+          <form id="form-create-separator" class="stack">
+            <label>Nome do separador
+              <input type="text" name="separatorName" placeholder="Ex.: Separador 1, Anderson, Caio..." required />
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Salvar separador</button>
+            </div>
+          </form>
+
+          <div class="section-header" style="margin-top:14px">
+            <div>
+              <h3>Separadores cadastrados</h3>
+              <p>${separators.length} separador(es) ativo(s).</p>
+            </div>
+          </div>
+          <div class="list">
+            ${separators.length ? separators.map((item) => `
+              <button type="button" class="list-item btn-select-separator ${item.id === selected?.id ? 'active' : ''}" data-id="${escapeHtml(item.id)}">
+                <div class="list-item-head">
+                  <strong>${escapeHtml(item.name || 'Separador')}</strong>
+                  <span class="tag info">${Array.isArray(item.storeIds) ? item.storeIds.length : 0} loja(s)</span>
+                </div>
+              </button>
+            `).join('') : `<div class="helper-card compact small">Nenhum separador cadastrado.</div>`}
+          </div>
+        </div>
+
+        <div class="card stack">
+          <div class="section-header">
+            <div>
+              <h3>Salvar lojas no separador</h3>
+              <p>Selecione o separador, marque as lojas e salve.</p>
+            </div>
+          </div>
+          ${selected ? `
+            <form id="form-separator-stores" class="stack">
+              <label>Separador
+                <select name="separatorId" required>${separatorOptions}</select>
+              </label>
+              <div class="form-grid">
+                <label>Rede
+                  <select name="network"><option value="">Todas as redes</option>${networkOptions}</select>
+                </label>
+                <label>Buscar loja
+                  <input type="search" name="search" value="${escapeHtml(searchRaw)}" placeholder="Digite o nome da loja" />
+                </label>
+              </div>
+              <div class="helper-card compact small">
+                Selecionado: <strong>${escapeHtml(selected.name || 'Separador')}</strong> • Lojas salvas nele: <strong>${selectedStoreIds.size}</strong>
+              </div>
+              <div class="table-wrap" style="max-height:520px; overflow:auto">
+                <table>
+                  <thead><tr><th style="width:60px">Usar</th><th>Loja</th><th>Rede</th></tr></thead>
+                  <tbody>
+                    ${stores.map((store) => `
+                      <tr>
+                        <td><input type="checkbox" name="storeIds" value="${escapeHtml(store.id)}" ${selectedStoreIds.has(store.id) ? 'checked' : ''} /></td>
+                        <td><strong>${escapeHtml(getStoreNameSafe(store))}</strong></td>
+                        <td>${escapeHtml(getNetworkSafe(store))}</td>
+                      </tr>
+                    `).join('') || `<tr><td colspan="3" class="center muted">Nenhuma loja encontrada.</td></tr>`}
+                  </tbody>
+                </table>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Salvar lojas no separador</button>
+              </div>
+            </form>
+          ` : `<div class="helper-card compact small">Cadastre um separador para vincular lojas.</div>`}
+        </div>
+      </div>
+    `;
+  } catch (error) {
+    console.error('Erro específico em Separadores:', error);
+    return `
+      <div class="card stack">
+        <h3>Separadores</h3>
+        <p class="muted">Não foi possível montar a lista de separadores. Atualize a página com Ctrl + F5. Se continuar, envie o erro do console.</p>
+        <div class="helper-card compact small">Detalhe técnico: ${escapeHtml(error?.message || String(error))}</div>
+      </div>
+    `;
+  }
 }
 
 function renderSaidas() {
@@ -14099,21 +14211,42 @@ function bindResumoEnviosEvents() {
 function bindSeparadoresEvents() {
   const createForm = document.getElementById('form-create-separator');
   const saveStoresForm = document.getElementById('form-separator-stores');
+
   createForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const result = await persistMutation('CREATE_SEPARATOR', { name: createForm.name?.value || '' }, 'Separador cadastrado com sucesso.');
+    const input = createForm.querySelector('[name="separatorName"]') || createForm.querySelector('[name="name"]');
+    const result = await persistMutation('CREATE_SEPARATOR', { name: input?.value || '' }, 'Separador cadastrado com sucesso.');
     if (result.ok) createForm.reset();
   });
+
   document.querySelectorAll('.btn-select-separator').forEach((button) => {
-    button.addEventListener('click', () => { viewFilters.separatorEditorId = button.dataset.id || ''; scheduleRender(); });
+    button.addEventListener('click', () => {
+      viewFilters.separatorEditorId = button.dataset.id || '';
+      scheduleRender();
+    });
   });
+
   if (saveStoresForm) {
-    saveStoresForm.separatorId?.addEventListener('change', () => { viewFilters.separatorEditorId = saveStoresForm.separatorId.value || ''; scheduleRender(); });
-    saveStoresForm.network?.addEventListener('change', () => { viewFilters.separatorEditorNetwork = saveStoresForm.network.value || ''; scheduleRender(); });
-    saveStoresForm.search?.addEventListener('input', debounce(() => { viewFilters.separatorEditorSearch = saveStoresForm.search.value || ''; scheduleRender(); }, 250));
+    const separatorField = saveStoresForm.querySelector('[name="separatorId"]');
+    const networkField = saveStoresForm.querySelector('[name="network"]');
+    const searchField = saveStoresForm.querySelector('[name="search"]');
+
+    separatorField?.addEventListener('change', () => {
+      viewFilters.separatorEditorId = separatorField.value || '';
+      scheduleRender();
+    });
+    networkField?.addEventListener('change', () => {
+      viewFilters.separatorEditorNetwork = networkField.value || '';
+      scheduleRender();
+    });
+    searchField?.addEventListener('input', debounce(() => {
+      viewFilters.separatorEditorSearch = searchField.value || '';
+      scheduleRender();
+    }, 250));
+
     saveStoresForm.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const separatorId = saveStoresForm.separatorId?.value || viewFilters.separatorEditorId || '';
+      const separatorId = separatorField?.value || viewFilters.separatorEditorId || '';
       const storeIds = Array.from(saveStoresForm.querySelectorAll('input[name="storeIds"]:checked')).map((input) => input.value);
       const result = await persistMutation('UPDATE_SEPARATOR_STORES', { separatorId, storeIds }, 'Lojas salvas no separador.');
       if (result.ok) viewFilters.separatorEditorId = separatorId;
@@ -14211,13 +14344,15 @@ function bindSaidasEvents() {
       const total = filled.reduce((sum, input) => sum + safeInt(input.value), 0);
       summary.innerHTML = `Lojas preenchidas: <strong>${filled.length}</strong> • Total de folhagens: <strong>${total}</strong> caixa(s).`;
     };
-    bulkForm.separatorId?.addEventListener('change', () => {
-      viewFilters.folhagensSeparatorId = bulkForm.separatorId.value || '';
-      viewFilters.folhagensSeparatorDate = bulkForm.date?.value || todayStr();
+    const bulkSeparatorField = bulkForm.querySelector('[name="separatorId"]');
+    const bulkDateField = bulkForm.querySelector('[name="date"]');
+    bulkSeparatorField?.addEventListener('change', () => {
+      viewFilters.folhagensSeparatorId = bulkSeparatorField.value || '';
+      viewFilters.folhagensSeparatorDate = bulkDateField?.value || todayStr();
       scheduleRender();
     });
-    bulkForm.date?.addEventListener('change', () => {
-      viewFilters.folhagensSeparatorDate = bulkForm.date.value || todayStr();
+    bulkDateField?.addEventListener('change', () => {
+      viewFilters.folhagensSeparatorDate = bulkDateField.value || todayStr();
       scheduleRender();
     });
     bulkForm.querySelectorAll('input[name^="folhagens_"]').forEach((input) => input.addEventListener('input', refreshBulkSummary));
@@ -14232,8 +14367,8 @@ function bindSaidasEvents() {
         return;
       }
       const result = await persistMutation('BULK_CREATE_FOLHAGENS_OUTBOUNDS', {
-        date: bulkForm.date?.value || todayStr(),
-        separatorId: bulkForm.separatorId?.value || '',
+        date: bulkForm.querySelector('[name="date"]')?.value || todayStr(),
+        separatorId: bulkForm.querySelector('[name="separatorId"]')?.value || '',
         entries,
       }, 'Lançamentos de folhagens salvos com sucesso.');
       if (result.ok) render();
@@ -14242,8 +14377,8 @@ function bindSaidasEvents() {
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const date = form.date.value || todayStr();
-    const storeId = form.storeId.value;
+    const date = form.querySelector('[name="date"]')?.value || todayStr();
+    const storeId = form.querySelector('[name="storeId"]')?.value || '';
     const routeId = getEffectiveRoute(storeId, date);
     const driverId = routeId ? getEffectiveDriver(routeId, date, storeId) : null;
 
@@ -14277,7 +14412,8 @@ function bindSaidasEvents() {
     const result = await persistMutation('CREATE_OUTBOUND', payload, 'Saída registrada com rota automática.');
     if (result.ok) {
       form.reset();
-      form.querySelector('[name="date"]').value = todayStr();
+      const dateFieldAfterSave = form.querySelector('[name="date"]');
+      if (dateFieldAfterSave) dateFieldAfterSave.value = todayStr();
       render();
     }
   });
