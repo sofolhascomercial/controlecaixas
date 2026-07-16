@@ -8960,8 +8960,17 @@ function renderCurrentView() {
   const viewHtml = renderers[currentView] ? renderers[currentView]() : renderDashboard();
   const globalMandatoryNotice = ['dashboard', 'inventario'].includes(currentView) ? '' : renderMandatoryInventoryNotice(todayStr());
   els.mainContent.innerHTML = globalMandatoryNotice ? `<div class="stack">${globalMandatoryNotice}${viewHtml}</div>` : viewHtml;
-  enhanceMobileTables();
-  bindViewEvents();
+  try {
+    enhanceMobileTables();
+  } catch (error) {
+    console.warn('Falha ao melhorar tabelas responsivas:', error);
+  }
+  try {
+    bindViewEvents();
+  } catch (error) {
+    console.error('Erro ao vincular eventos da tela:', error);
+    showToast('A área abriu, mas alguns botões podem precisar atualizar a página. Envie o erro do console se persistir.', 'warn');
+  }
 }
 
 function renderMobileQuickNav() {
@@ -9262,6 +9271,18 @@ function getCdReturnPendingSummary(state = appState, user = currentUser) {
   return { groups, total, routes, drivers, oldest };
 }
 
+
+
+function getCdPendingExpectedStoresForDate(date = todayStr(), user = currentUser, state = appState) {
+  try {
+    const summary = getDashboardStoreProcessSummary(state, user, date);
+    const pendingIds = new Set(Array.isArray(summary.expectedWithoutCd) ? summary.expectedWithoutCd : []);
+    return getActiveStores(state).filter((store) => pendingIds.has(store.id));
+  } catch (error) {
+    console.warn('Falha ao calcular lojas pendentes pela base oficial do dia:', error);
+    return getActiveStores(state).filter((store) => storeHasPendingOutboundForUser(store.id, date, user, state));
+  }
+}
 
 function getDashboardStoreProcessSummary(state = appState, user = currentUser, date = todayStr()) {
   const scopeUser = user?.role === 'promoter' ? { role: 'viewer' } : user;
@@ -11045,8 +11066,7 @@ function renderSaidas() {
   const date = todayStr();
   const recent = appState.movements.outbounds.filter((item) => isActiveMovement(item) && item.status !== 'historico').slice(0, 10);
   const showSeparatorFilter = canUseSeparatorFilter(currentUser);
-  const stores = getActiveStores()
-    .filter((store) => storeHasPendingOutboundForUser(store.id, date, currentUser, appState))
+  const stores = getCdPendingExpectedStoresForDate(date, currentUser, appState)
     .sort((a, b) => compareOutboundStoreOptions(a, b, currentUser));
   return `
     <div class="grid-2">
@@ -14269,10 +14289,9 @@ function bindSaidasEvents() {
     const date = form.querySelector('[name="date"]').value || todayStr();
     const network = networkSelect?.value || '';
     const separator = separatorSelect?.value || '';
-    return getActiveStores()
+    return getCdPendingExpectedStoresForDate(date, currentUser, appState)
       .filter((store) => !network || inferStoreNetwork(store) === network)
-      .filter((store) => !separator || getStoreSeparator(store) === separator)
-      .filter((store) => storeHasPendingOutboundForUser(store.id, date, currentUser, appState))
+      .filter((store) => !separator || getStoreSeparator(store) === separator || getSeparatorForStoreId(store.id)?.name === separator)
       .sort((a, b) => compareOutboundStoreOptions(a, b, currentUser));
   };
 
