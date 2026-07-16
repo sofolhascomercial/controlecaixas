@@ -4114,6 +4114,7 @@ const MOBILE_ICON_BY_VIEW = {
   dashboard: '🏠',
   baseEntregas: '📥',
   saidas: '📦',
+  separadores: '🌿',
   resumoEnvios: '📋',
   entregasMotorista: '🚚',
   recebimentos: '✅',
@@ -8702,8 +8703,6 @@ function renderReliefDriverRouteSelection() {
             <button type="submit" class="btn btn-primary">Confirmar rota do dia</button>
           </div>
         </form>
-
-        ${canUseFolhagensBulkLaunch(currentUser) ? renderFolhagensPorSeparadorCard() : ''}
       </div>
 
       <div class="card">
@@ -8733,27 +8732,6 @@ function bindReliefDriverRouteEvents() {
   const form = document.getElementById('form-rota-folguista');
   if (!form) return;
 
-  if (bulkForm) {
-    const refreshBulkSummary = () => {
-      const summary = document.getElementById('folhagens-separador-resumo');
-      if (!summary) return;
-      const inputs = Array.from(bulkForm.querySelectorAll('input[name^="folhagens_"]:not(:disabled)'));
-      const filled = inputs.filter((input) => safeInt(input.value) > 0);
-      const total = filled.reduce((sum, input) => sum + safeInt(input.value), 0);
-      summary.innerHTML = `Lojas preenchidas: <strong>${filled.length}</strong> • Total de folhagens: <strong>${total}</strong> caixa(s).`;
-    };
-    bulkForm.separatorId?.addEventListener('change', () => { viewFilters.folhagensSeparatorId = bulkForm.separatorId.value || ''; viewFilters.folhagensSeparatorDate = bulkForm.date?.value || todayStr(); scheduleRender(); });
-    bulkForm.date?.addEventListener('change', () => { viewFilters.folhagensSeparatorDate = bulkForm.date.value || todayStr(); scheduleRender(); });
-    bulkForm.querySelectorAll('input[name^="folhagens_"]').forEach((input) => input.addEventListener('input', refreshBulkSummary));
-    refreshBulkSummary();
-    bulkForm.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const entries = Array.from(bulkForm.querySelectorAll('input[name^="folhagens_"]:not(:disabled)')).map((input) => ({ storeId: input.name.replace('folhagens_', ''), folhagens: safeInt(input.value) })).filter((entry) => entry.folhagens > 0);
-      if (!entries.length) { showToast('Informe pelo menos uma quantidade de folhagens.', 'error'); return; }
-      const result = await persistMutation('BULK_CREATE_FOLHAGENS_OUTBOUNDS', { date: bulkForm.date?.value || todayStr(), separatorId: bulkForm.separatorId?.value || '', entries }, 'Lançamentos de folhagens salvos com sucesso.');
-      if (result.ok) render();
-    });
-  }
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -11010,6 +10988,7 @@ function renderSaidas() {
             <button type="button" id="btn-reset-saida" class="btn btn-secondary">Limpar</button>
           </div>
         </form>
+        ${canUseFolhagensBulkLaunch(currentUser) ? renderFolhagensPorSeparadorCard() : ''}
       </div>
 
       <div class="card">
@@ -14209,18 +14188,57 @@ function bindSaidasEvents() {
     `;
   };
 
+  const saidaDateInput = form.querySelector('[name="date"]');
   networkSelect?.addEventListener('change', refreshStoreOptions);
   separatorSelect?.addEventListener('change', refreshStoreOptions);
-  storeSelect.addEventListener('change', refreshRouteInfo);
-  form.querySelector('[name="date"]').addEventListener('change', refreshStoreOptions);
+  storeSelect?.addEventListener('change', refreshRouteInfo);
+  saidaDateInput?.addEventListener('change', refreshStoreOptions);
 
   resetBtn?.addEventListener('click', () => {
     form.reset();
-    form.querySelector('[name="date"]').value = todayStr();
+    if (saidaDateInput) saidaDateInput.value = todayStr();
     refreshStoreOptions();
   });
 
   refreshStoreOptions();
+
+  if (bulkForm) {
+    const refreshBulkSummary = () => {
+      const summary = document.getElementById('folhagens-separador-resumo');
+      if (!summary) return;
+      const inputs = Array.from(bulkForm.querySelectorAll('input[name^="folhagens_"]:not(:disabled)'));
+      const filled = inputs.filter((input) => safeInt(input.value) > 0);
+      const total = filled.reduce((sum, input) => sum + safeInt(input.value), 0);
+      summary.innerHTML = `Lojas preenchidas: <strong>${filled.length}</strong> • Total de folhagens: <strong>${total}</strong> caixa(s).`;
+    };
+    bulkForm.separatorId?.addEventListener('change', () => {
+      viewFilters.folhagensSeparatorId = bulkForm.separatorId.value || '';
+      viewFilters.folhagensSeparatorDate = bulkForm.date?.value || todayStr();
+      scheduleRender();
+    });
+    bulkForm.date?.addEventListener('change', () => {
+      viewFilters.folhagensSeparatorDate = bulkForm.date.value || todayStr();
+      scheduleRender();
+    });
+    bulkForm.querySelectorAll('input[name^="folhagens_"]').forEach((input) => input.addEventListener('input', refreshBulkSummary));
+    refreshBulkSummary();
+    bulkForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const entries = Array.from(bulkForm.querySelectorAll('input[name^="folhagens_"]:not(:disabled)'))
+        .map((input) => ({ storeId: input.name.replace('folhagens_', ''), folhagens: safeInt(input.value) }))
+        .filter((entry) => entry.folhagens > 0);
+      if (!entries.length) {
+        showToast('Informe pelo menos uma quantidade de folhagens.', 'error');
+        return;
+      }
+      const result = await persistMutation('BULK_CREATE_FOLHAGENS_OUTBOUNDS', {
+        date: bulkForm.date?.value || todayStr(),
+        separatorId: bulkForm.separatorId?.value || '',
+        entries,
+      }, 'Lançamentos de folhagens salvos com sucesso.');
+      if (result.ok) render();
+    });
+  }
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
