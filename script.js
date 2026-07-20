@@ -25,6 +25,7 @@ const APP_CONFIG = {
 
 const STORAGE_KEY = 'sofolhas_caixas_app_local_v1';
 const SESSION_KEY = 'sofolhas_caixas_session_v1';
+const PERSISTENT_SESSION_KEY = 'sofolhas_caixas_persistent_session_v1';
 const INITIAL_PASSWORD = '123456';
 
 const BOX_TYPES = [
@@ -4157,6 +4158,11 @@ const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', res
 let firebaseDb = null;
 let firebaseRootRef = null;
 let unsubscribeFirebase = null;
+let firebaseUsersLoaded = false;
+let firebaseUsersReadyPromise = Promise.resolve(false);
+let pendingSessionUserId = null;
+let pendingSessionStorageMode = null;
+let pendingRememberLogin = false;
 let dynamicCountsCache = { key: '', value: null };
 let renderQueued = false;
 let renderInProgress = false;
@@ -4219,6 +4225,7 @@ const els = {
   firstConfirmPassword: document.getElementById('first-confirm-password'),
   loginUsername: document.getElementById('login-username'),
   loginPassword: document.getElementById('login-password'),
+  rememberLogin: document.getElementById('remember-login'),
   publicDashboardBtn: document.getElementById('public-dashboard-btn'),
   sidebarNav: document.getElementById('sidebar-nav'),
   sidebar: document.getElementById('sidebar'),
@@ -4241,9 +4248,10 @@ document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
   appState = await loadState();
-  restoreSession();
   bindBaseEvents();
+  restoreSession();
   render();
+  startFirebaseSync();
 }
 
 function bindBaseEvents() {
@@ -6183,48 +6191,188 @@ function createSeedState() {
 }
 
 async function loadState() {
-  if (APP_CONFIG.USE_FIREBASE && APP_CONFIG.FIREBASE_CONFIG && window.firebase) {
+  if (!APP_CONFIG.USE_FIREBASE) {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        return ensureStateShape(JSON.parse(saved));
+      } catch (error) {
+        console.warn('Base local inválida. Recriando estado inicial.', error);
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    }
+    const seed = createSeedState();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
+    return seed;
+  }
+
+  // O login é liberado imediatamente com a estrutura inicial.
+  // Usuários e dados operacionais do Firebase entram em segundo plano.
+  return createSeedState();
+}
+
+function normalizeFirebaseUserCollection(rawUsers) {
+  const users = Array.isArray(rawUsers)
+    ? rawUsers
+    : Object.values(rawUsers || {});
+  return users.filter(Boolean).map(normalizeUserRecord);
+}
+
+function findUserById(userId, state = appState) {
+  return state?.users?.find((user) => user.id === userId) || null;
+}
+
+function readSavedSession() {
+  const candidates = [
+    { storage: localStorage, mode: 'local', key: PERSISTENT_SESSION_KEY },
+    { storage: sessionStorage, mode: 'session', key: SESSION_KEY },
+  ];
+
+  for (const candidate of candidates) {
+    const raw = candidate.storage.getItem(candidate.key);
+    if (!raw) continue;
     try {
-      if (!firebase.apps.length) {
-        firebase.initializeApp(APP_CONFIG.FIREBASE_CONFIG);
-      }
-      firebaseDb = firebase.database();
-      firebaseRootRef = firebaseDb.ref(APP_CONFIG.FIREBASE_PATH);
-      backendMode = 'firebase';
+      const data = JSON.parse(raw);
+      if (data?.userId) return { userId: data.userId, mode: candidate.mode };
+    } catch (error) {
+      console.warn('Sessão salva inválida. Removendo registro.', error);
+    }
+    candidate.storage.removeItem(candidate.key);
+  }
+  return null;
+}
 
-      const snap = await firebaseRootRef.get();
-      let state = snap.exists() ? ensureStateShape(snap.val()) : createSeedState();
-      if (!snap.exists()) {
-        await firebaseRootRef.set(sanitizeForFirebase(state));
-      }
+function clearSavedSessions() {
+  localStorage.removeItem(PERSISTENT_SESSION_KEY);
+  localStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(PERSISTENT_SESSION_KEY);
+  pendingSessionUserId = null;
+  pendingSessionStorageMode = null;
+}
 
-      let firstFirebaseSnapshot = true;
-      unsubscribeFirebase = firebaseRootRef.on('value', (snapshot) => {
-        appState = ensureStateShape(snapshot.val() || createSeedState());
-        invalidateUiCaches();
-        if (firstFirebaseSnapshot) {
-          firstFirebaseSnapshot = false;
-          return;
+function saveAuthenticatedSession(userId, rememberOnDevice) {
+  clearSavedSessions();
+  const payload = JSON.stringify({ userId });
+  if (rememberOnDevice) {
+    localStorage.setItem(PERSISTENT_SESSION_KEY, payload);
+    pendingSessionStorageMode = 'local';
+  } else {
+    sessionStorage.setItem(SESSION_KEY, payload);
+    pendingSessionStorageMode = 'session';
+  }
+}
+
+function applyAuthenticatedUser(user, { fromSavedSession = false } = {}) {
+  if (!user) return false;
+  if (user.role === 'promoter' && !user.storeId) {
+    if (!fromSavedSession) showToast('Este promotor ainda não possui loja vinculada. Procure o administrador.', 'error');
+    return false;
+  }
+  if (mustChangePassword(user)) {
+    clearSavedSessions();
+    passwordChangeUser = user;
+    currentUser = null;
+    return false;
+  }
+  currentUser = user;
+  passwordChangeUser = null;
+  currentView = getFirstAllowedView(currentUser);
+  return true;
+}
+
+function reconcileAuthenticatedUser({ clearMissingSavedSession = false } = {}) {
+  const savedUserId = currentUser?.id || pendingSessionUserId;
+  if (!savedUserId) return;
+  const updatedUser = findUserById(savedUserId);
+  if (updatedUser) {
+    const restored = applyAuthenticatedUser(updatedUser, { fromSavedSession: !!pendingSessionUserId });
+    if (restored) {
+      pendingSessionUserId = null;
+      scheduleRender();
+    }
+    return;
+  }
+  if (clearMissingSavedSession) {
+    clearSavedSessions();
+    currentUser = null;
+    passwordChangeUser = null;
+    scheduleRender();
+  }
+}
+
+function startFirebaseSync() {
+  if (!(APP_CONFIG.USE_FIREBASE && APP_CONFIG.FIREBASE_CONFIG && window.firebase)) {
+    backendMode = 'local';
+    firebaseUsersLoaded = true;
+    firebaseUsersReadyPromise = Promise.resolve(false);
+    return;
+  }
+
+  try {
+    if (!firebase.apps.length) {
+      firebase.initializeApp(APP_CONFIG.FIREBASE_CONFIG);
+    }
+    firebaseDb = firebase.database();
+    firebaseRootRef = firebaseDb.ref(APP_CONFIG.FIREBASE_PATH);
+    backendMode = 'firebase';
+
+    const usersRef = firebaseRootRef.child('users');
+    firebaseUsersReadyPromise = usersRef.get()
+      .then((snapshot) => {
+        const users = normalizeFirebaseUserCollection(snapshot.val());
+        if (users.length) {
+          appState.users = users;
+          firebaseUsersLoaded = true;
+          reconcileAuthenticatedUser({ clearMissingSavedSession: true });
+          return true;
         }
-        scheduleRender();
+        firebaseUsersLoaded = true;
+        return false;
+      })
+      .catch((error) => {
+        firebaseUsersLoaded = true;
+        console.error('Falha ao carregar usuários do Firebase.', error);
+        return false;
       });
 
-      return state;
-    } catch (error) {
-      console.error('Falha ao iniciar Firebase, usando modo local.', error);
-      showToast('Firebase não configurado. Sistema carregado em modo local.', 'warn');
-      backendMode = 'local';
-    }
-  }
+    let receivedFirstSnapshot = false;
+    unsubscribeFirebase = firebaseRootRef.on('value', (snapshot) => {
+      if (!snapshot.exists()) {
+        if (!receivedFirstSnapshot) {
+          receivedFirstSnapshot = true;
+          firebaseRootRef.set(sanitizeForFirebase(appState)).catch((error) => {
+            console.error('Falha ao criar base inicial no Firebase.', error);
+          });
+        }
+        return;
+      }
 
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    return ensureStateShape(JSON.parse(saved));
+      receivedFirstSnapshot = true;
+      appState = ensureStateShape(snapshot.val());
+      firebaseUsersLoaded = true;
+      invalidateUiCaches();
+      reconcileAuthenticatedUser({ clearMissingSavedSession: true });
+      scheduleRender();
+    }, (error) => {
+      console.error('Falha na sincronização em tempo real do Firebase.', error);
+      if (!currentUser) showToast(firebaseErrorMessage(error), 'error');
+    });
+  } catch (error) {
+    console.error('Falha ao iniciar Firebase, usando modo local.', error);
+    backendMode = 'local';
+    firebaseUsersLoaded = true;
+    firebaseUsersReadyPromise = Promise.resolve(false);
+    showToast('Não foi possível conectar à base. O sistema abriu em modo local.', 'warn');
   }
+}
 
-  const seed = createSeedState();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
-  return seed;
+async function waitForFirebaseUsers(timeoutMs = 5000) {
+  if (firebaseUsersLoaded || backendMode !== 'firebase') return;
+  await Promise.race([
+    firebaseUsersReadyPromise,
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
 }
 
 function saveLocalState(state) {
@@ -8565,48 +8713,74 @@ function clearPasswordChangeForm() {
 
 function restoreSession() {
   publicDashboardMode = false;
-  const session = sessionStorage.getItem(SESSION_KEY);
-  if (!session) return;
-  const data = JSON.parse(session);
-  const found = appState.users.find((user) => user.id === data.userId);
-  if (found) {
-    if (mustChangePassword(found)) {
-      sessionStorage.removeItem(SESSION_KEY);
-      passwordChangeUser = found;
-      currentUser = null;
-      return;
-    }
-    currentUser = found;
-    currentView = getFirstAllowedView(currentUser);
+  const savedSession = readSavedSession();
+  if (!savedSession) return;
+
+  pendingSessionUserId = savedSession.userId;
+  pendingSessionStorageMode = savedSession.mode;
+  const found = findUserById(savedSession.userId);
+  if (!found) return;
+
+  if (applyAuthenticatedUser(found, { fromSavedSession: true })) {
+    pendingSessionUserId = null;
   }
 }
 
-function handleLogin(event) {
+function setLoginBusy(isBusy) {
+  const button = els.loginForm?.querySelector('button[type="submit"]');
+  if (!button) return;
+  if (!button.dataset.defaultText) button.dataset.defaultText = button.textContent || 'Entrar';
+  button.disabled = isBusy;
+  button.textContent = isBusy ? 'Entrando...' : button.dataset.defaultText;
+}
+
+async function handleLogin(event) {
   event.preventDefault();
+  if (!appState) return;
   publicDashboardMode = false;
   const username = normalizeLoginValue(els.loginUsername.value);
   const password = els.loginPassword.value.trim();
-  const user = appState.users.find((item) => normalizeLoginValue(item.username) === username && item.password === password);
-  if (!user) {
-    showToast('Usuário ou senha inválidos.', 'error');
-    return;
-  }
+  const rememberOnDevice = !!els.rememberLogin?.checked;
+  pendingRememberLogin = rememberOnDevice;
+  setLoginBusy(true);
 
-  if (mustChangePassword(user)) {
-    passwordChangeUser = user;
-    currentUser = null;
-    clearPasswordChangeForm();
-    showToast('Altere a senha inicial para continuar.', 'warn');
+  try {
+    if (backendMode === 'firebase' && !firebaseUsersLoaded) {
+      await waitForFirebaseUsers(2500);
+    }
+    const user = appState.users.find((item) => normalizeLoginValue(item.username) === username && item.password === password);
+
+    if (!user) {
+      showToast('Usuário ou senha inválidos.', 'error');
+      return;
+    }
+
+    if (user.role === 'promoter' && !user.storeId) {
+      showToast('Este promotor ainda não possui loja vinculada. Procure o administrador.', 'error');
+      return;
+    }
+
+    if (mustChangePassword(user)) {
+      clearSavedSessions();
+      passwordChangeUser = user;
+      currentUser = null;
+      clearPasswordChangeForm();
+      showToast('Altere a senha inicial para continuar.', 'warn');
+      render();
+      return;
+    }
+
+    applyAuthenticatedUser(user);
+    saveAuthenticatedSession(user.id, rememberOnDevice);
+    if (els.loginPassword) els.loginPassword.value = '';
+    showToast(`Bem-vindo, ${user.name.split(' ')[0]}!`);
     render();
-    return;
+  } catch (error) {
+    console.error('Erro ao realizar login.', error);
+    showToast('Não foi possível entrar agora. Verifique a conexão e tente novamente.', 'error');
+  } finally {
+    setLoginBusy(false);
   }
-
-  currentUser = user;
-  passwordChangeUser = null;
-  currentView = getFirstAllowedView(currentUser);
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ userId: user.id }));
-  showToast(`Bem-vindo, ${user.name.split(' ')[0]}!`);
-  render();
 }
 
 function startPublicDashboardAccess() {
@@ -8614,7 +8788,7 @@ function startPublicDashboardAccess() {
   passwordChangeUser = null;
   currentUser = { ...PUBLIC_DASHBOARD_USER };
   currentView = 'dashboard';
-  sessionStorage.removeItem(SESSION_KEY);
+  clearSavedSessions();
   clearPasswordChangeForm();
   if (els.loginUsername) els.loginUsername.value = '';
   if (els.loginPassword) els.loginPassword.value = '';
@@ -8649,17 +8823,22 @@ async function handleFirstPasswordChange(event) {
   currentUser = updatedUser;
   passwordChangeUser = null;
   currentView = getFirstAllowedView(currentUser);
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ userId: updatedUser.id }));
+  saveAuthenticatedSession(updatedUser.id, pendingRememberLogin);
+  pendingRememberLogin = false;
   clearPasswordChangeForm();
   render();
 }
 
 function logout() {
-  sessionStorage.removeItem(SESSION_KEY);
+  clearSavedSessions();
+  pendingRememberLogin = false;
   publicDashboardMode = false;
   document.body.classList.remove('public-dashboard-mode');
   currentUser = null;
   passwordChangeUser = null;
+  if (els.loginUsername) els.loginUsername.value = '';
+  if (els.loginPassword) els.loginPassword.value = '';
+  if (els.rememberLogin) els.rememberLogin.checked = false;
   els.sidebar.classList.remove('open');
   render();
 }
@@ -8770,7 +8949,7 @@ function render() {
     if (!publicDashboardMode && mustChangePassword(currentUser)) {
       passwordChangeUser = currentUser;
       currentUser = null;
-      sessionStorage.removeItem(SESSION_KEY);
+      clearSavedSessions();
       render();
       return;
     }
@@ -10576,6 +10755,36 @@ function renderBaseEntregas() {
   `;
 }
 
+function getDashboardRouteSummary(routes, user, state = appState, date = todayStr()) {
+  const routeIds = new Set(routes.map((route) => route.id));
+  const totalsByRoute = new Map(routes.map((route) => [route.id, { sent: 0, pickup: 0, returned: 0 }]));
+
+  const addMovement = (items, field, valueGetter, extraFilter = null) => {
+    (items || []).forEach((item) => {
+      if (item.date !== date || !routeIds.has(item.routeId)) return;
+      if (extraFilter && !extraFilter(item)) return;
+      if (!isMovementVisibleToUser(item, user, state)) return;
+      const totals = totalsByRoute.get(item.routeId);
+      totals[field] += valueGetter(item);
+    });
+  };
+
+  addMovement(state.movements.outbounds, 'sent', (item) => sumQty(item.qty), (item) => item.status !== 'historico');
+  addMovement(state.movements.pickups, 'pickup', (item) => item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty));
+  addMovement(state.movements.returns, 'returned', (item) => sumQty(item.qty));
+
+  return routes.map((route) => {
+    const totals = totalsByRoute.get(route.id) || { sent: 0, pickup: 0, returned: 0 };
+    return {
+      route,
+      sent: totals.sent,
+      pickup: totals.pickup,
+      returned: totals.returned,
+      diff: totals.pickup - totals.returned,
+    };
+  });
+}
+
 function renderDashboard() {
   const metrics = getTodayMetrics();
   const forecast = getForecast();
@@ -10593,13 +10802,7 @@ function renderDashboard() {
   const operationSummary = getDashboardStoreProcessSummary(appState, dashboardMovementUser, todayStr());
   const dashboardCategoryQty = promoterCompanyDashboard ? companyBoxTotals.byType : (showCdForecast ? appState.cdStock : visibleStoreQty);
   const dashboardCategoryTotal = Math.max(1, sumQty(dashboardCategoryQty));
-  const routeSummary = routesForDashboard.map((route) => {
-    const sent = appState.movements.outbounds.filter((item) => item.date === todayStr() && item.routeId === route.id && item.status !== 'historico' && isMovementVisibleToUser(item, dashboardMovementUser, appState)).reduce((acc, item) => acc + sumQty(item.qty), 0);
-    const pickup = appState.movements.pickups.filter((item) => item.date === todayStr() && item.routeId === route.id && isMovementVisibleToUser(item, dashboardMovementUser, appState)).reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
-    const returned = appState.movements.returns.filter((item) => item.date === todayStr() && item.routeId === route.id && isMovementVisibleToUser(item, dashboardMovementUser, appState)).reduce((acc, item) => acc + sumQty(item.qty), 0);
-    const diff = pickup - returned;
-    return { route, sent, pickup, returned, diff };
-  });
+  const routeSummary = getDashboardRouteSummary(routesForDashboard, dashboardMovementUser, appState, todayStr());
 
   return `
     <div class="stack">
