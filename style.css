@@ -1085,3 +1085,74 @@ th{color:var(--muted); font-weight:700; background:#fafcfb; position:sticky; top
 }
 body.public-dashboard-mode .sidebar-nav .nav-link:not(.active){display:none}
 body.public-dashboard-mode .sidebar-user-role::after{content:' • somente leitura'}
+
+/* Dashboard: acompanhamento operacional por regional */
+.dashboard-regional-table-wrap{
+  border:1px solid var(--line);
+  border-radius:16px;
+  overflow:auto;
+}
+.dashboard-regional-table{
+  border-collapse:separate;
+  border-spacing:0;
+  min-width:620px;
+}
+.dashboard-regional-table th,
+.dashboard-regional-table td{
+  padding:15px 16px;
+}
+.dashboard-regional-table th:not(:first-child),
+.dashboard-regional-table td:not(:first-child){
+  text-align:center;
+}
+.dashboard-regional-table th.regional-df{
+  color:var(--green-800);
+  background:#eef8f0;
+}
+.dashboard-regional-table th.regional-goiania{
+  color:var(--blue);
+  background:#eef4ff;
+}
+.dashboard-regional-table td.regional-df{
+  color:var(--green-800);
+  background:#f8fcf8;
+  font-size:1.35rem;
+}
+.dashboard-regional-table td.regional-goiania{
+  color:var(--blue);
+  background:#f8faff;
+  font-size:1.35rem;
+}
+.regional-stage-icon{
+  width:34px;
+  height:34px;
+  display:inline-grid;
+  place-items:center;
+  margin-right:10px;
+  border-radius:12px;
+  background:#f1f5f2;
+  vertical-align:middle;
+}
+.dashboard-regional-note{
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+  margin-top:14px;
+  padding:12px 14px;
+  border:1px solid #dceadf;
+  border-radius:14px;
+  background:#f7fbf8;
+  color:var(--muted);
+  font-size:.9rem;
+}
+.dashboard-regional-note > span:first-child{
+  color:var(--green-800);
+  font-weight:800;
+}
+@media(max-width:720px){
+  .dashboard-regional-table-wrap{border:0;overflow:visible}
+  .dashboard-regional-table{min-width:0}
+  .dashboard-regional-table td.regional-df,
+  .dashboard-regional-table td.regional-goiania{font-size:1.1rem}
+  .regional-stage-icon{display:none}
+}

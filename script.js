@@ -40,6 +40,9 @@ const GOIANIA_TRUNK_ROUTE_ID = 'rota_goiania_vinicius';
 const GOIANIA_TRUNK_DRIVER_IDS = ['user_motor_vinicius', 'user_motor_sebastiao'];
 const SUPPORT_POINT_STORE_ID = 'loja_fazenda_neropolis_sr_carlinhos';
 const SUPPORT_POINT_ROUTE_ID = 'rota_ponto_apoio_neropolis';
+// Classificação aprovada para o painel: rotas de Goiânia + ponto de apoio.
+// Todas as demais lojas pertencem à Regional DF para fins de acompanhamento.
+const REGIONAL_GOIANIA_ROUTE_IDS = new Set([...GOIANIA_ROUTE_IDS, SUPPORT_POINT_ROUTE_ID]);
 const RELIEF_DRIVER_CAIO_USER = {
   id: 'user_motor_caio',
   name: 'Caio',
@@ -9249,6 +9252,28 @@ function enhanceMobileTables() {
   });
 }
 
+function getStoreRegionalKey(storeId, state = appState) {
+  const store = getStoreById(storeId, state);
+  if (!store) return 'df';
+  if (store.id === SUPPORT_POINT_STORE_ID) return 'goiania';
+
+  // A regional é uma característica estável da loja. Trocas temporárias de rota
+  // não alteram sua regional no dashboard.
+  const registeredRouteIds = [store.defaultRouteId, store.sundayRouteId].filter(Boolean);
+  return registeredRouteIds.some((routeId) => REGIONAL_GOIANIA_ROUTE_IDS.has(routeId))
+    ? 'goiania'
+    : 'df';
+}
+
+function countStoreIdsByRegional(storeIds, state = appState) {
+  const totals = { df: 0, goiania: 0 };
+  for (const storeId of storeIds || []) {
+    const regionalKey = getStoreRegionalKey(storeId, state);
+    totals[regionalKey] += 1;
+  }
+  return totals;
+}
+
 function getEffectiveRoute(storeId, date = todayStr(), state = appState) {
   const exception = state.movements.routeExceptions.find((item) => item.storeId === storeId && item.date === date);
   if (exception) return exception.newRouteId;
@@ -9576,12 +9601,30 @@ function getDashboardStoreProcessSummary(state = appState, user = currentUser, d
   const driverWithoutPromoter = [...driverStoreIds].filter((storeId) => storeRequiresPromoter(getStoreById(storeId, state)) && !promoterStoreIds.has(storeId));
   const driverWithoutCd = [...driverStoreIds].filter((storeId) => !cdStoreIds.has(storeId));
   const promoterWithoutDriver = [...promoterStoreIds].filter((storeId) => !driverStoreIds.has(storeId) && storeRequiresDriver(getStoreById(storeId, state)));
+  const expectedByRegional = countStoreIdsByRegional(expectedStoreIds, state);
+  const cdByRegional = countStoreIdsByRegional(cdStoreIds, state);
+  const driverByRegional = countStoreIdsByRegional(driverStoreIds, state);
+  const promoterByRegional = countStoreIdsByRegional(promoterStoreIds, state);
   return {
     date,
     expectedStores: expectedStoreIds.size,
     cdStores: cdStoreIds.size,
     driverStores: driverStoreIds.size,
     promoterStores: promoterStoreIds.size,
+    regional: {
+      df: {
+        expectedStores: expectedByRegional.df,
+        cdStores: cdByRegional.df,
+        driverStores: driverByRegional.df,
+        promoterStores: promoterByRegional.df,
+      },
+      goiania: {
+        expectedStores: expectedByRegional.goiania,
+        cdStores: cdByRegional.goiania,
+        driverStores: driverByRegional.goiania,
+        promoterStores: promoterByRegional.goiania,
+      },
+    },
     expectedSource: importedPlan.hasActiveImports ? 'planilha' : 'agenda',
     importedPlanCount: importedPlan.imports.length,
     unmatchedPlanNames: importedPlan.unmatchedNames,
@@ -9591,6 +9634,53 @@ function getDashboardStoreProcessSummary(state = appState, user = currentUser, d
     driverWithoutCd,
     promoterWithoutDriver,
   };
+}
+
+function renderDashboardRegionalSummary(summary) {
+  const regional = summary?.regional || {};
+  const df = regional.df || {};
+  const goiania = regional.goiania || {};
+  const rows = [
+    { label: 'Lojas previstas no dia', icon: '📌', key: 'expectedStores' },
+    { label: 'Lançadas pelo CD', icon: '🏭', key: 'cdStores' },
+    { label: 'Lançadas pelo motorista', icon: '🚚', key: 'driverStores' },
+    { label: 'Validadas pelo promotor', icon: '🏬', key: 'promoterStores' },
+  ];
+
+  return `
+    <div class="card dashboard-regional-card">
+      <div class="section-header">
+        <div>
+          <h3>Acompanhamento por Regional</h3>
+          <p>Separação operacional entre Regional DF e Regional Goiânia.</p>
+        </div>
+      </div>
+      <div class="table-wrap dashboard-regional-table-wrap">
+        <table class="dashboard-regional-table">
+          <thead>
+            <tr>
+              <th>Etapa</th>
+              <th class="regional-df">Regional DF</th>
+              <th class="regional-goiania">Regional Goiânia</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr>
+                <td><span class="regional-stage-icon">${row.icon}</span><strong>${row.label}</strong></td>
+                <td class="regional-df"><strong>${safeInt(df[row.key])}</strong></td>
+                <td class="regional-goiania"><strong>${safeInt(goiania[row.key])}</strong></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="dashboard-regional-note">
+        <span aria-hidden="true">ⓘ</span>
+        <span>Total geral = Regional DF + Regional Goiânia. A Regional DF reúne todas as lojas que não pertencem às rotas de Goiânia.</span>
+      </div>
+    </div>
+  `;
 }
 
 function renderDashboardOperationSummary(summary) {
@@ -9636,6 +9726,7 @@ function renderDashboardOperationSummary(summary) {
         ${renderMetricCard('Validadas pelo motorista', summary.driverStores, '🚚', summary.driverStores >= summary.cdStores && summary.cdStores ? 'success' : 'warning', 'Total de lojas com entrega confirmada')}
         ${renderMetricCard('Confirmadas pelo promotor', summary.promoterStores, '🏬', summary.promoterStores >= summary.driverStores && summary.driverStores ? 'success' : 'warning', 'Total de lojas com recebimento confirmado')}
       </div>
+      ${renderDashboardRegionalSummary(summary)}
       <div class="card">
         <div class="section-header">
           <div>
