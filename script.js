@@ -26,6 +26,7 @@ const APP_CONFIG = {
 const STORAGE_KEY = 'sofolhas_caixas_app_local_v1';
 const SESSION_KEY = 'sofolhas_caixas_session_v1';
 const PERSISTENT_SESSION_KEY = 'sofolhas_caixas_persistent_session_v1';
+const UNIFIED_STOCK_VERSION = 1;
 const INITIAL_PASSWORD = '123456';
 
 const BOX_TYPES = [
@@ -4758,7 +4759,7 @@ function getStoresForManualReceiptValidation(date = todayStr(), user = currentUs
 
 function createSystemOutboundFromValidation(state, actor, { date, storeId, routeId, driverId, totalQty, source }) {
   const store = getStoreById(storeId, state);
-  const qty = buildQtyFromTotal(totalQty, emptyQty());
+  const qty = unifiedStockQty(totalQty);
   const outbound = {
     id: randomId('out'),
     date,
@@ -4995,12 +4996,12 @@ function applyRouteDataset(base) {
   const previousStocksByName = {};
 
   (base.stores || []).forEach((store) => {
-    previousStocksByName[normalizeText(store.name)] = sanitizeQty(previousStocksById[store.id] || emptyQty());
+    previousStocksByName[normalizeText(store.name)] = unifiedStockQty(previousStocksById[store.id] || emptyQty());
   });
 
   const nextStocks = {};
   seedData.stores.forEach((store) => {
-    nextStocks[store.id] = sanitizeQty(previousStocksById[store.id] || previousStocksByName[normalizeText(store.name)] || emptyQty());
+    nextStocks[store.id] = unifiedStockQty(previousStocksById[store.id] || previousStocksByName[normalizeText(store.name)] || emptyQty());
   });
 
   const previousUsers = Array.isArray(base.users) ? base.users : [];
@@ -5039,6 +5040,14 @@ function safeInt(value) {
   return Number.isFinite(num) && num >= 0 ? Math.floor(num) : 0;
 }
 
+function debounce(callback, wait = 250) {
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => callback(...args), wait);
+  };
+}
+
 function signedInt(value) {
   const num = Number(value || 0);
   return Number.isFinite(num) ? Math.trunc(num) : 0;
@@ -5065,6 +5074,50 @@ function sanitizeQty(raw) {
 
 function sumQty(qty) {
   return BOX_TYPES.reduce((acc, item) => acc + safeInt(qty?.[item.key]), 0);
+}
+
+function qtyTotal(value) {
+  return typeof value === 'number' ? safeInt(value) : sumQty(sanitizeQty(value));
+}
+
+function unifiedStockQty(value = 0) {
+  return { folhagens: qtyTotal(value), bandejas: 0 };
+}
+
+function addUnifiedStock(stock, value) {
+  return unifiedStockQty(sumQty(sanitizeQty(stock)) + qtyTotal(value));
+}
+
+function subUnifiedStock(stock, value) {
+  return unifiedStockQty(Math.max(0, sumQty(sanitizeQty(stock)) - qtyTotal(value)));
+}
+
+function unifiedQtyDiff(actual, expected) {
+  return { folhagens: sumQty(sanitizeQty(actual)) - sumQty(sanitizeQty(expected)), bandejas: 0 };
+}
+
+function hasTotalQtyDifference(a, b) {
+  return sumQty(sanitizeQty(a)) !== sumQty(sanitizeQty(b));
+}
+
+function totalQtyInput(prefix, value = 0, label = 'Total de caixas') {
+  return `
+    <div class="qty-grid single-total-qty">
+      <div class="qty-box">
+        <label for="${prefix}-total">${label}</label>
+        <input type="number" min="0" step="1" id="${prefix}-total" name="totalQty" value="${qtyTotal(value)}" />
+      </div>
+    </div>
+  `;
+}
+
+function readTotalQtyFromForm(form, prefix) {
+  return safeInt(form?.querySelector(`#${prefix}-total`)?.value);
+}
+
+function fillTotalQtyInput(prefix, value) {
+  const input = document.getElementById(`${prefix}-total`);
+  if (input) input.value = qtyTotal(value);
 }
 
 function sumSignedQty(qty) {
@@ -5139,24 +5192,19 @@ function qtyToRows(qty) {
 }
 
 function formatQtyCompact(qty) {
-  return BOX_TYPES.map((item) => `${item.key === 'folhagens' ? 'F' : 'B'}: ${safeInt(qty?.[item.key])}`).join(' | ');
+  return `Total: ${sumQty(sanitizeQty(qty))}`;
 }
 
 function formatSignedQtyCompact(qty) {
-  return BOX_TYPES.map((item) => {
-    const value = signedInt(qty?.[item.key]);
-    return `${item.key === 'folhagens' ? 'F' : 'B'}: ${value > 0 ? '+' : ''}${value}`;
-  }).join(' | ');
+  const value = sumSignedQty(qty);
+  return `Total: ${value > 0 ? '+' : ''}${value}`;
 }
 
 function renderQtyChangeSummary(previousQty = emptyQty(), countedQty = emptyQty(), diffQty = null) {
-  const diff = diffQty || qtyDiff(countedQty, previousQty);
-  return BOX_TYPES.map((item) => {
-    const before = safeInt(previousQty?.[item.key]);
-    const after = safeInt(countedQty?.[item.key]);
-    const change = signedInt(diff?.[item.key]);
-    return `${item.key === 'folhagens' ? 'Folhagens' : 'Bandejas'}: ${before} → ${after} (${change > 0 ? '+' : ''}${change})`;
-  }).join('<br>');
+  const before = sumQty(sanitizeQty(previousQty));
+  const after = sumQty(sanitizeQty(countedQty));
+  const change = diffQty ? sumSignedQty(diffQty) : after - before;
+  return `Caixas: ${before} → ${after} (${change > 0 ? '+' : ''}${change})`;
 }
 
 function qtyInputs(prefix, values = emptyQty(), readonly = false) {
@@ -5912,19 +5960,27 @@ function slugId(value) {
 }
 
 function getStoreStock(storeId, state = appState) {
-  return sanitizeQty(state.storeStocks[storeId] || emptyQty());
+  return unifiedStockQty(state.storeStocks[storeId] || emptyQty());
 }
 
 function getCdStock(state = appState) {
-  return sanitizeQty(state.cdStock);
+  return unifiedStockQty(state.cdStock);
 }
 
 function ensureStateShape(state) {
   const base = state || createSeedState();
   const seedData = createRouteSeedData();
 
-  base.cdStock = sanitizeQty(base.cdStock);
+  const previousUnifiedStockVersion = safeInt(base.unifiedStockVersion);
+  base.cdStock = unifiedStockQty(base.cdStock);
   base.storeStocks = base.storeStocks || {};
+  Object.keys(base.storeStocks).forEach((storeId) => {
+    base.storeStocks[storeId] = unifiedStockQty(base.storeStocks[storeId]);
+  });
+  if (previousUnifiedStockVersion < UNIFIED_STOCK_VERSION) {
+    base.unifiedStockMigratedAt = base.unifiedStockMigratedAt || nowIso();
+  }
+  base.unifiedStockVersion = UNIFIED_STOCK_VERSION;
   base.movements = base.movements || {};
   base.movements.outbounds = Array.isArray(base.movements.outbounds) ? base.movements.outbounds : [];
   base.movements.receipts = Array.isArray(base.movements.receipts) ? base.movements.receipts : [];
@@ -5947,14 +6003,19 @@ function ensureStateShape(state) {
   base.movements.outbounds = base.movements.outbounds.map((item) => ({
     ...item,
     qty: sanitizeQty(item.qty),
-    receivedQty: item.receivedQty ? sanitizeQty(item.receivedQty) : null,
+    receivedQty: item.receivedQty ? unifiedStockQty(item.receivedQty) : null,
+    driverDeliveredQty: (item.driverDeliveredQty || item.driverDeliveredTotal !== undefined) ? unifiedStockQty(item.driverDeliveredTotal ?? item.driverDeliveredQty) : null,
   }));
-  base.movements.receipts = base.movements.receipts.map((item) => ({ ...item, qty: sanitizeQty(item.qty) }));
+  base.movements.receipts = base.movements.receipts.map((item) => ({
+    ...item,
+    qty: unifiedStockQty(item.totalReceived ?? item.qty),
+    totalReceived: safeInt(item.totalReceived ?? sumQty(item.qty)),
+  }));
   base.movements.driverDeliveries = base.movements.driverDeliveries.map((item) => ({
     ...item,
     expectedQty: sanitizeQty(item.expectedQty),
-    actualQty: item.actualQty ? sanitizeQty(item.actualQty) : null,
-    totalDelivered: safeInt(item.totalDelivered),
+    actualQty: (item.actualQty || item.totalDelivered !== undefined) ? unifiedStockQty(item.totalDelivered ?? item.actualQty) : null,
+    totalDelivered: safeInt(item.totalDelivered ?? sumQty(item.actualQty)),
   }));
   base.movements.goianiaLoads = base.movements.goianiaLoads.map((item) => ({
     ...item,
@@ -5967,30 +6028,43 @@ function ensureStateShape(state) {
   }));
   base.movements.goianiaFreightReturns = base.movements.goianiaFreightReturns.map((item) => ({
     ...item,
-    expectedQty: sanitizeQty(item.expectedQty),
-    actualQty: sanitizeQty(item.actualQty),
+    expectedQty: unifiedStockQty(item.expectedTotal ?? item.expectedQty),
+    actualQty: unifiedStockQty(item.totalReceived ?? item.actualQty),
     expectedTotal: safeInt(item.expectedTotal ?? sumQty(item.expectedQty)),
     totalReceived: safeInt(item.totalReceived ?? sumQty(item.actualQty)),
   }));
   base.movements.supportPointMovements = base.movements.supportPointMovements.map((item) => ({
     ...item,
-    qty: sanitizeQty(item.qty),
+    qty: unifiedStockQty(item.totalQty ?? item.qty),
     totalQty: safeInt(item.totalQty ?? sumQty(item.qty)),
+    totalOnly: true,
     action: item.action || 'drop',
     status: item.status || 'registrado',
   }));
-  base.movements.pickups = base.movements.pickups.map((item) => ({ ...item, qty: sanitizeQty(item.qty) }));
+  base.movements.pickups = base.movements.pickups.map((item) => ({
+    ...item,
+    qty: unifiedStockQty(item.totalQty ?? item.qty),
+    totalQty: safeInt(item.totalQty ?? sumQty(item.qty)),
+    totalOnly: true,
+  }));
   base.movements.returns = base.movements.returns.map((item) => ({
     ...item,
-    qty: sanitizeQty(item.qty),
-    expectedQty: sanitizeQty(item.expectedQty),
+    qty: unifiedStockQty(item.totalQty ?? item.qty),
+    expectedQty: unifiedStockQty(item.expectedTotal ?? item.expectedQty),
+    totalQty: safeInt(item.totalQty ?? sumQty(item.qty)),
+    expectedTotal: safeInt(item.expectedTotal ?? sumQty(item.expectedQty)),
+    totalOnly: true,
   }));
-  base.movements.inventories = base.movements.inventories.map((item) => ({
-    ...item,
-    previousQty: sanitizeQty(item.previousQty),
-    countedQty: sanitizeQty(item.countedQty),
-    diffQty: item.diffQty || qtyDiff(sanitizeQty(item.countedQty), sanitizeQty(item.previousQty)),
-  }));
+  base.movements.inventories = base.movements.inventories.map((item) => {
+    const previousQty = unifiedStockQty(item.previousQty);
+    const countedQty = unifiedStockQty(item.countedQty);
+    return {
+      ...item,
+      previousQty,
+      countedQty,
+      diffQty: unifiedQtyDiff(countedQty, previousQty),
+    };
+  });
   base.movements.occupiedBoxes = base.movements.occupiedBoxes.map((item) => ({
     ...item,
     totalQty: safeInt(item.totalQty),
@@ -6085,11 +6159,14 @@ function ensureStateShape(state) {
 
   base.divergences = base.divergences.map((div) => {
     if (!div) return div;
+    const usesUnifiedTotal = ['saida_cd_nao_lancada', 'entrega_motorista_loja', 'recebimento_loja', 'retorno_cd', 'frete_goiania_retorno_vinicius', 'inventario_cd', 'inventario_loja'].includes(div.type);
+    const expectedQty = usesUnifiedTotal ? unifiedStockQty(div.expectedTotal ?? div.expectedQty) : sanitizeQty(div.expectedQty);
+    const actualQty = usesUnifiedTotal ? unifiedStockQty(div.actualTotal ?? div.actualQty) : sanitizeQty(div.actualQty);
     const out = {
       ...div,
-      expectedQty: sanitizeQty(div.expectedQty),
-      actualQty: sanitizeQty(div.actualQty),
-      differenceQty: div.differenceQty || qtyDiff(sanitizeQty(div.actualQty), sanitizeQty(div.expectedQty)),
+      expectedQty,
+      actualQty,
+      differenceQty: usesUnifiedTotal ? unifiedQtyDiff(actualQty, expectedQty) : (div.differenceQty || qtyDiff(actualQty, expectedQty)),
     };
     if ((out.type === 'recebimento_loja' || out.type === 'retorno_cd') && out.driverId && !out.responsibleUserId) {
       out.responsibleUserId = out.driverId;
@@ -6103,7 +6180,7 @@ function ensureStateShape(state) {
   const validRouteIds = new Set(base.routes.map((route) => route.id));
 
   base.stores.forEach((store) => {
-    base.storeStocks[store.id] = sanitizeQty(base.storeStocks[store.id] || emptyQty());
+    base.storeStocks[store.id] = unifiedStockQty(base.storeStocks[store.id] || emptyQty());
     if (!store.highStockLimit) store.highStockLimit = 100;
     const link = getSeparatorLinkForStore(store);
     if (link && !String(store.separator || '').trim()) store.separator = link.separator;
@@ -6153,6 +6230,8 @@ function createSeedState() {
 
   return {
     routeDatasetVersion: ROUTE_DATASET_VERSION,
+    unifiedStockVersion: UNIFIED_STOCK_VERSION,
+    unifiedStockMigratedAt: nowIso(),
     users: seedData.users.map(normalizeUserRecord),
     stores: seedData.stores,
     routes: seedData.routes,
@@ -6466,9 +6545,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const supportDropTotal = pendingSupportDrops.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
     const pickupQty = pendingPickups.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
     const freightReturnTotal = pendingFreightReturns.reduce((acc, item) => acc + safeInt(item.totalReceived), 0);
-    const referenceQty = addQty(pickupQty, buildQtyFromTotal(freightReturnTotal, emptyQty()));
     const expectedTotal = Math.max(0, sumQty(pickupQty) + freightReturnTotal - supportDropTotal);
-    const expectedQty = buildQtyFromTotal(expectedTotal, referenceQty);
+    const expectedQty = unifiedStockQty(expectedTotal);
     return {
       date: returnDate,
       pendingPickups,
@@ -6488,8 +6566,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const { date, pendingPickups, pendingFreightReturns, pendingSupportDrops, supportDropTotal, expectedQty, expectedTotal } = expectation;
     if (expectedTotal <= 0) return { ok: false, error: 'Não há recolhimentos pendentes para esta rota e motorista.' };
 
-    const qty = buildQtyFromTotal(totalQty, expectedQty);
-    state.cdStock = addQty(getCdStock(state), qty);
+    const qty = unifiedStockQty(totalQty);
+    state.cdStock = addUnifiedStock(getCdStock(state), totalQty);
 
     const returnBatchId = randomId('ret');
     state.movements.returns.unshift({
@@ -6583,7 +6661,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const delivery = state.movements.driverDeliveries.find((item) => item.id === outbound.driverDeliveryId);
     if (delivery) {
       delivery.expectedQty = expectedQty;
-      delivery.hasDivergence = hasQtyDifference(expectedQty, delivery.actualQty);
+      delivery.hasDivergence = hasTotalQtyDifference(expectedQty, delivery.actualQty);
       if (delivery.hasDivergence) {
         openDivergence({
           type: 'entrega_motorista_loja',
@@ -6595,7 +6673,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
           storeId: outbound.storeId,
           expectedQty,
           actualQty: sanitizeQty(delivery.actualQty),
-          differenceQty: qtyDiff(delivery.actualQty, expectedQty),
+          differenceQty: unifiedQtyDiff(delivery.actualQty, expectedQty),
           justification: reason || `Motorista informou ${sumQty(delivery.actualQty)} caixas, mas o correto esperado para a loja era ${sumQty(expectedQty)}.`,
           originJustification: delivery.notes || '',
           responsibleUserId: delivery.driverId || outbound.driverId,
@@ -6610,7 +6688,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
 
     const receipt = state.movements.receipts.find((item) => item.id === outbound.receiptId);
     if (receipt && storeRequiresPromoter(store)) {
-      if (hasQtyDifference(expectedQty, receipt.qty)) {
+      if (hasTotalQtyDifference(expectedQty, receipt.qty)) {
         openDivergence({
           type: 'recebimento_loja',
           outboundId: outbound.id,
@@ -6621,7 +6699,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
           storeId: outbound.storeId,
           expectedQty,
           actualQty: sanitizeQty(receipt.qty),
-          differenceQty: qtyDiff(receipt.qty, expectedQty),
+          differenceQty: unifiedQtyDiff(receipt.qty, expectedQty),
           justification: reason || 'Diferença identificada entre o CD e o recebimento da loja.',
           originJustification: receipt.justification || '',
           responsibleUserId: outbound.driverId,
@@ -6973,7 +7051,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const outbound = createSystemOutboundFromValidation(state, actor, {
       date, storeId: store.id, routeId, driverId, totalQty: totalDelivered, source: 'motorista_sem_saida_cd'
     });
-    const qty = sanitizeQty(outbound.qty);
+    const qty = unifiedStockQty(totalDelivered);
     const delivery = {
       id: randomId('drvdel'),
       outboundId: outbound.id,
@@ -7001,7 +7079,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     outbound.status = storeRequiresPromoter(store) ? 'validada_motorista_sem_cd' : 'recebida_motorista_sem_cd';
 
     if (!storeRequiresPromoter(store)) {
-      state.storeStocks[store.id] = addQty(getStoreStock(store.id, state), qty);
+      state.storeStocks[store.id] = addUnifiedStock(getStoreStock(store.id, state), qty);
       const receipt = {
         id: randomId('rec'),
         outboundId: outbound.id,
@@ -7060,13 +7138,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (totalDelivered <= 0) return { ok: false, error: 'Informe o total de caixas deixadas na loja.' };
 
     const hasTotalDifference = totalDelivered !== expectedTotal;
-    let actualQty = hasTotalDifference ? sanitizeQty(payload.actualQty) : expectedQty;
-
-    if (hasTotalDifference) {
-      if (sumQty(actualQty) !== totalDelivered) {
-        return { ok: false, error: `O detalhamento precisa fechar com o total informado pelo motorista. Total informado: ${totalDelivered}. Correto esperado para a loja: ${expectedQty.folhagens} folhagens e ${expectedQty.bandejas} bandejas.` };
-      }
-    }
+    const actualQty = unifiedStockQty(totalDelivered);
 
     const delivery = {
       id: randomId('drvdel'),
@@ -7079,7 +7151,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       expectedQty,
       totalDelivered,
       actualQty,
-      hasDivergence: hasQtyDifference(expectedQty, actualQty),
+      hasDivergence: hasTotalDifference,
       notes: payload.notes || '',
       createdBy: actor.name,
       createdById: actor.id,
@@ -7092,7 +7164,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     outbound.driverDeliveredBy = actor.name;
 
     if (!storeRequiresPromoter(store)) {
-      state.storeStocks[outbound.storeId] = addQty(getStoreStock(outbound.storeId, state), actualQty);
+      state.storeStocks[outbound.storeId] = addUnifiedStock(getStoreStock(outbound.storeId, state), actualQty);
       const receipt = {
         id: randomId('rec'),
         outboundId: outbound.id,
@@ -7112,7 +7184,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       outbound.status = 'validada_motorista';
     }
 
-    if (hasQtyDifference(expectedQty, actualQty)) {
+    if (hasTotalDifference) {
       openDivergence({
         type: 'entrega_motorista_loja',
         outboundId: outbound.id,
@@ -7123,7 +7195,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
         storeId: outbound.storeId,
         expectedQty,
         actualQty,
-        differenceQty: qtyDiff(actualQty, expectedQty),
+        differenceQty: unifiedQtyDiff(actualQty, expectedQty),
         justification: payload.notes || `Motorista informou ${totalDelivered} caixas, mas o correto esperado para a loja era ${expectedTotal}.`,
         originJustification: payload.notes || '',
         responsibleUserId: delivery.driverId,
@@ -7134,7 +7206,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
         responsibleExplanationBy: null,
       });
     }
-    audit('Entrega do Motorista', 'Entrega validada', `${actor.name} confirmou ${totalDelivered} caixas deixadas em ${store.name}. Correto esperado: ${expectedQty.folhagens} folhagens e ${expectedQty.bandejas} bandejas.`);
+    audit('Entrega do Motorista', 'Entrega validada', `${actor.name} confirmou ${totalDelivered} caixas deixadas em ${store.name}. Total esperado: ${expectedTotal} caixas.`);
   }
 
   if (type === 'CONFIRM_GOIANIA_LOAD') {
@@ -7233,8 +7305,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (expectedTotal <= 0) return { ok: false, error: 'Não há recolhimentos pendentes desse freteiro para devolver ao Vinicius/Sebastião nesta data.' };
     const totalReceived = safeInt(payload.totalReceived);
     if (totalReceived <= 0) return { ok: false, error: 'Informe o total de caixas devolvidas pelo freteiro.' };
-    const expectedQty = pendingPickups.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
-    const actualQty = buildQtyFromTotal(totalReceived, expectedQty);
+    const expectedQty = unifiedStockQty(expectedTotal);
+    const actualQty = unifiedStockQty(totalReceived);
     const returnId = randomId('gynret');
     state.movements.goianiaFreightReturns.unshift({
       id: returnId,
@@ -7294,13 +7366,13 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (action === 'collect' && totalQty > currentTotal && !String(payload.notes || '').trim()) {
       return { ok: false, error: 'Para recolher mais caixas do que o saldo do ponto de apoio, informe uma justificativa.' };
     }
-    const qty = action === 'drop' ? buildQtyFromTotal(totalQty, emptyQty()) : buildQtyFromTotal(totalQty, currentStock);
+    const qty = unifiedStockQty(totalQty);
     const movementId = randomId('support');
     if (action === 'drop') {
-      state.storeStocks[store.id] = addQty(currentStock, qty);
+      state.storeStocks[store.id] = addUnifiedStock(currentStock, qty);
     } else {
       const removeQty = buildQtyFromTotal(Math.min(totalQty, currentTotal), currentStock);
-      state.storeStocks[store.id] = subQty(currentStock, removeQty);
+      state.storeStocks[store.id] = subUnifiedStock(currentStock, removeQty);
       state.movements.pickups.unshift({
         id: randomId('pick'),
         date,
@@ -7378,7 +7450,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const conflictStores = normalizedEntries.filter((entry) => safeInt(getActiveOutboundForStoreDate(entry.storeId, date, state)?.qty?.folhagens) > 0).map((entry) => getStoreById(entry.storeId, state)?.name || entry.storeId);
     if (conflictStores.length) return { ok: false, error: `Já existe lançamento de folhagens para: ${conflictStores.slice(0, 5).join(', ')}${conflictStores.length > 5 ? '...' : ''}. Use Editar em Saídas recentes para corrigir.` };
     const totalQty = normalizedEntries.reduce((sum, entry) => sum + entry.qty, 0);
-    if (safeInt(getCdStock(state).folhagens) < totalQty) return { ok: false, error: 'O CD não possui folhagens suficientes para este lançamento em massa.' };
+    if (sumQty(getCdStock(state)) < totalQty) return { ok: false, error: 'O CD não possui caixas suficientes para este lançamento em massa.' };
     for (const entry of normalizedEntries) {
       const store = getStoreById(entry.storeId, state);
       if (!store) return { ok: false, error: 'Uma das lojas selecionadas não foi encontrada.' };
@@ -7387,7 +7459,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       const driverId = getEffectiveDriver(routeId, date, store.id, state);
       if (!driverId) return { ok: false, error: `${store.name} não possui motorista vinculado na rota.` };
     }
-    state.cdStock = subQty(getCdStock(state), { folhagens: totalQty, bandejas: 0 });
+    state.cdStock = subUnifiedStock(getCdStock(state), totalQty);
     for (const entry of normalizedEntries) {
       const store = getStoreById(entry.storeId, state);
       const routeId = getEffectiveRoute(store.id, date, state);
@@ -7440,13 +7512,13 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     }
 
     const cdStock = getCdStock(state);
-    if (qtyExceeds(qty, cdStock)) return { ok: false, error: 'O CD não possui caixas suficientes para esta saída.' };
+    if (sumQty(qty) > sumQty(cdStock)) return { ok: false, error: 'O CD não possui caixas suficientes para esta saída.' };
 
-    state.cdStock = subQty(cdStock, qty);
+    state.cdStock = subUnifiedStock(cdStock, qty);
 
     if (existingOutbound) {
       if (existingOutbound.driverDeliveryId || existingOutbound.receiptId || existingOutbound.goianiaTransferId) {
-        state.cdStock = addQty(getCdStock(state), qty);
+        state.cdStock = addUnifiedStock(getCdStock(state), qty);
         return { ok: false, error: 'Esta loja já teve validação posterior. Estorne a validação antes de complementar a saída.' };
       }
       existingOutbound.cdLaunches = normalizeOutboundCdLaunches(existingOutbound);
@@ -7500,9 +7572,9 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       if (forbiddenBox) return { ok: false, error: `Seu usuário não tem permissão para lançar ${forbiddenBox.label}.` };
     }
 
-    const restoredCdStock = addQty(getCdStock(state), oldQty);
-    if (qtyExceeds(newQty, restoredCdStock)) return { ok: false, error: 'O CD não possui saldo suficiente para essa correção.' };
-    state.cdStock = subQty(restoredCdStock, newQty);
+    const restoredCdStock = addUnifiedStock(getCdStock(state), oldQty);
+    if (sumQty(newQty) > sumQty(restoredCdStock)) return { ok: false, error: 'O CD não possui saldo suficiente para essa correção.' };
+    state.cdStock = subUnifiedStock(restoredCdStock, newQty);
 
     outbound.qty = newQty;
     outbound.cdLaunches = [{
@@ -7657,18 +7729,20 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (!outbound) return { ok: false, error: 'Saída vinculada à entrega não encontrada.' };
     const reason = String(payload.reason || '').trim();
     if (reason.length < 3) return { ok: false, error: 'Informe o motivo da correção.' };
-    const newQty = sanitizeQty(payload.qty);
-    const oldQty = sanitizeQty(delivery.actualQty);
-    if (sumQty(newQty) <= 0) return { ok: false, error: 'Informe a quantidade corrigida entregue pelo motorista.' };
-    if (!hasQtyDifference(newQty, oldQty)) return { ok: false, error: 'A quantidade corrigida é igual à quantidade atual.' };
+    const newTotal = safeInt(payload.totalQty ?? sumQty(sanitizeQty(payload.qty)));
+    const newQty = unifiedStockQty(newTotal);
+    const oldQty = unifiedStockQty(delivery.actualQty);
+    const oldTotal = sumQty(oldQty);
+    if (newTotal <= 0) return { ok: false, error: 'Informe a quantidade corrigida entregue pelo motorista.' };
+    if (newTotal === oldTotal) return { ok: false, error: 'A quantidade corrigida é igual à quantidade atual.' };
 
     const store = getStoreById(delivery.storeId, state);
     const receipt = state.movements.receipts.find((item) => item.id === outbound.receiptId || item.driverDeliveryId === delivery.id);
     if (receipt && !storeRequiresPromoter(store)) {
-      const stockDiff = qtyDiff(newQty, oldQty);
-      const adjustedStock = applySignedQty(getStoreStock(delivery.storeId, state), stockDiff);
-      if (hasSignedNegativeQty(adjustedStock)) return { ok: false, error: 'Não há saldo suficiente na loja para reduzir essa quantidade. Verifique recolhimentos posteriores.' };
-      state.storeStocks[delivery.storeId] = adjustedStock;
+      const stockTotal = sumQty(getStoreStock(delivery.storeId, state));
+      const adjustedTotal = stockTotal + (newTotal - oldTotal);
+      if (adjustedTotal < 0) return { ok: false, error: 'Não há saldo suficiente na loja para reduzir essa quantidade. Verifique recolhimentos posteriores.' };
+      state.storeStocks[delivery.storeId] = unifiedStockQty(adjustedTotal);
       receipt.qty = newQty;
       receipt.updatedAt = nowIso();
       receipt.updatedBy = actor.name;
@@ -7691,7 +7765,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     delivery.actualQty = newQty;
     delivery.totalDelivered = sumQty(newQty);
     delivery.expectedQty = sanitizeQty(outbound.qty);
-    delivery.hasDivergence = hasQtyDifference(delivery.expectedQty, newQty);
+    delivery.hasDivergence = sumQty(delivery.expectedQty) !== newTotal;
     delivery.notes = delivery.notes ? `${delivery.notes}\nCorreção: ${reason}` : `Correção: ${reason}`;
     delivery.updatedAt = nowIso();
     delivery.updatedBy = actor.name;
@@ -7716,15 +7790,17 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (!outbound) return { ok: false, error: 'Saída vinculada ao recebimento não encontrada.' };
     const reason = String(payload.reason || '').trim();
     if (reason.length < 3) return { ok: false, error: 'Informe o motivo da correção.' };
-    const newQty = sanitizeQty(payload.qty);
-    const oldQty = sanitizeQty(receipt.qty);
-    if (sumQty(newQty) <= 0) return { ok: false, error: 'Informe a quantidade corrigida recebida na loja.' };
-    if (!hasQtyDifference(newQty, oldQty)) return { ok: false, error: 'A quantidade corrigida é igual à quantidade atual.' };
+    const newTotal = safeInt(payload.totalQty ?? sumQty(sanitizeQty(payload.qty)));
+    const newQty = unifiedStockQty(newTotal);
+    const oldQty = unifiedStockQty(receipt.qty);
+    const oldTotal = sumQty(oldQty);
+    if (newTotal <= 0) return { ok: false, error: 'Informe a quantidade corrigida recebida na loja.' };
+    if (newTotal === oldTotal) return { ok: false, error: 'A quantidade corrigida é igual à quantidade atual.' };
 
-    const stockDiff = qtyDiff(newQty, oldQty);
-    const adjustedStock = applySignedQty(getStoreStock(receipt.storeId, state), stockDiff);
-    if (hasSignedNegativeQty(adjustedStock)) return { ok: false, error: 'Não há saldo suficiente na loja para reduzir essa quantidade. Verifique recolhimentos posteriores.' };
-    state.storeStocks[receipt.storeId] = adjustedStock;
+    const stockTotal = sumQty(getStoreStock(receipt.storeId, state));
+    const adjustedTotal = stockTotal + (newTotal - oldTotal);
+    if (adjustedTotal < 0) return { ok: false, error: 'Não há saldo suficiente na loja para reduzir essa quantidade. Verifique recolhimentos posteriores.' };
+    state.storeStocks[receipt.storeId] = unifiedStockQty(adjustedTotal);
 
     receipt.qtyCorrections = Array.isArray(receipt.qtyCorrections) ? receipt.qtyCorrections : [];
     receipt.qtyCorrections.unshift({
@@ -7768,8 +7844,8 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const outbound = createSystemOutboundFromValidation(state, actor, {
       date, storeId: store.id, routeId, driverId, totalQty: totalReceived, source: 'promotor_sem_saida_cd'
     });
-    const qty = sanitizeQty(outbound.qty);
-    state.storeStocks[store.id] = addQty(getStoreStock(store.id, state), qty);
+    const qty = unifiedStockQty(totalReceived);
+    state.storeStocks[store.id] = addUnifiedStock(getStoreStock(store.id, state), qty);
     const receipt = {
       id: randomId('rec'),
       outboundId: outbound.id,
@@ -7824,12 +7900,9 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     const totalReceived = payload.totalReceived !== undefined ? safeInt(payload.totalReceived) : sumQty(sanitizeQty(payload.qty));
     if (totalReceived <= 0) return { ok: false, error: 'Informe o total de caixas recebidas.' };
     const hasTotalDifference = totalReceived !== expectedTotal;
-    const qty = hasTotalDifference ? sanitizeQty(payload.qty) : expectedQty;
-    if (hasTotalDifference && sumQty(qty) !== totalReceived) {
-      return { ok: false, error: `O detalhamento precisa fechar com o total informado pelo promotor. Total informado: ${totalReceived}. Correto esperado para a loja: ${expectedQty.folhagens} folhagens e ${expectedQty.bandejas} bandejas.` };
-    }
+    const qty = unifiedStockQty(totalReceived);
 
-    state.storeStocks[outbound.storeId] = addQty(getStoreStock(outbound.storeId, state), qty);
+    state.storeStocks[outbound.storeId] = addUnifiedStock(getStoreStock(outbound.storeId, state), qty);
     const receipt = {
       id: randomId('rec'),
       outboundId: outbound.id,
@@ -7838,7 +7911,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       expectedQty,
       totalReceived,
       qty,
-      hasDivergence: hasQtyDifference(expectedQty, qty),
+      hasDivergence: hasTotalDifference,
       createdBy: actor.name,
       createdById: actor.id,
       createdAt: nowIso(),
@@ -7848,7 +7921,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     outbound.status = 'recebida';
     outbound.receivedQty = qty;
 
-    if (hasQtyDifference(expectedQty, qty)) {
+    if (hasTotalDifference) {
       openDivergence({
         type: 'recebimento_loja',
         outboundId: outbound.id,
@@ -7859,6 +7932,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
         storeId: outbound.storeId,
         expectedQty,
         actualQty: qty,
+        differenceQty: unifiedQtyDiff(qty, expectedQty),
         justification: payload.justification || 'Diferença identificada entre o CD e o recebimento da loja.',
         originJustification: payload.justification || '',
         responsibleUserId: outbound.driverId,
@@ -7869,7 +7943,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
         responsibleExplanationBy: null,
       });
     }
-    audit('Recebimento na Loja', 'Confirmação de recebimento', `Loja ${getStoreById(outbound.storeId, state)?.name || '-'} confirmou ${totalReceived} caixas. Correto esperado: ${expectedQty.folhagens} folhagens e ${expectedQty.bandejas} bandejas.`);
+    audit('Recebimento na Loja', 'Confirmação de recebimento', `Loja ${getStoreById(outbound.storeId, state)?.name || '-'} confirmou ${totalReceived} caixas. Total esperado: ${expectedTotal} caixas.`);
   }
 
 
@@ -7952,9 +8026,9 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       return { ok: false, error: 'Mesmo sem saldo suficiente na loja, o recolhimento pode ser registrado, mas a justificativa é obrigatória.' };
     }
 
-    const qty = buildQtyFromTotal(totalQty, storeStock);
-    const stockQtyToRemove = buildQtyFromTotal(Math.min(totalQty, availableTotal), storeStock);
-    state.storeStocks[payload.storeId] = subQty(storeStock, stockQtyToRemove);
+    const qty = unifiedStockQty(totalQty);
+    const stockQtyToRemove = unifiedStockQty(Math.min(totalQty, availableTotal));
+    state.storeStocks[payload.storeId] = subUnifiedStock(storeStock, stockQtyToRemove);
     state.movements.pickups.unshift({
       id: randomId('pick'),
       date: payload.date || todayStr(),
@@ -8260,7 +8334,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     }
 
     const location = payload.location === 'cd' ? 'cd' : 'store';
-    const qty = sanitizeQty(payload.qty);
+    const countedTotal = safeInt(payload.totalQty ?? sumQty(sanitizeQty(payload.qty)));
     const date = payload.date || todayStr();
     const notes = (payload.notes || '').trim();
 
@@ -8281,15 +8355,15 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     }
 
     const previousQty = location === 'cd' ? getCdStock(state) : getStoreStock(payload.storeId, state);
-    const countedQty = sanitizeQty(qty);
-    const diffQty = qtyDiff(countedQty, previousQty);
-    const hasDivergence = hasQtyDifference(previousQty, countedQty);
+    const countedQty = unifiedStockQty(countedTotal);
+    const diffQty = unifiedQtyDiff(countedQty, previousQty);
+    const hasDivergence = countedTotal !== sumQty(previousQty);
     const store = location === 'store' ? getStoreById(payload.storeId, state) : null;
 
     if (location === 'cd') {
-      state.cdStock = countedQty;
+      state.cdStock = unifiedStockQty(countedQty);
     } else {
-      state.storeStocks[payload.storeId] = countedQty;
+      state.storeStocks[payload.storeId] = unifiedStockQty(countedQty);
     }
 
     const inventoryRecord = {
@@ -8361,11 +8435,12 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       if (!store || store.status === 'inactive') return;
 
       const previousQty = getStoreStock(storeId, state);
-      const countedQty = sanitizeQty(entry.qty);
-      const diffQty = qtyDiff(countedQty, previousQty);
-      const hasDivergence = hasQtyDifference(previousQty, countedQty);
+      const countedTotal = safeInt(entry.totalQty ?? sumQty(sanitizeQty(entry.qty)));
+      const countedQty = unifiedStockQty(countedTotal);
+      const diffQty = unifiedQtyDiff(countedQty, previousQty);
+      const hasDivergence = countedTotal !== sumQty(previousQty);
 
-      state.storeStocks[storeId] = countedQty;
+      state.storeStocks[storeId] = unifiedStockQty(countedQty);
 
       const inventoryRecord = {
         id: randomId('inv'),
@@ -8618,7 +8693,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       if (movement.receiptId || movement.driverDeliveryId) {
         return { ok: false, error: 'Esta saída já possui validação/recebimento. Estorne primeiro os movimentos vinculados.' };
       }
-      state.cdStock = addQty(getCdStock(state), movement.qty);
+      state.cdStock = addUnifiedStock(getCdStock(state), movement.qty);
       Object.assign(movement, cancelInfo);
     } else if (movementType === 'driverDelivery') {
       const outbound = state.movements.outbounds.find((item) => item.id === movement.outboundId);
@@ -8632,7 +8707,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       Object.assign(movement, cancelInfo);
     } else if (movementType === 'receipt') {
       const stock = getStoreStock(movement.storeId, state);
-      state.storeStocks[movement.storeId] = subQty(stock, movement.qty);
+      state.storeStocks[movement.storeId] = subUnifiedStock(stock, movement.qty);
       const outbound = state.movements.outbounds.find((item) => item.id === movement.outboundId);
       if (outbound) {
         delete outbound.receiptId;
@@ -8642,14 +8717,14 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       Object.assign(movement, cancelInfo);
     } else if (movementType === 'pickup') {
       if (movement.returnBatchId) return { ok: false, error: 'Este recolhimento já retornou ao CD. Estorne primeiro o retorno no CD.' };
-      state.storeStocks[movement.storeId] = addQty(getStoreStock(movement.storeId, state), movement.qty);
+      state.storeStocks[movement.storeId] = addUnifiedStock(getStoreStock(movement.storeId, state), movement.qty);
       Object.assign(movement, cancelInfo);
     } else if (movementType === 'occupiedBox') {
       Object.assign(movement, cancelInfo);
     } else if (movementType === 'releasedBox') {
       Object.assign(movement, cancelInfo);
     } else if (movementType === 'return') {
-      state.cdStock = subQty(getCdStock(state), movement.qty);
+      state.cdStock = subUnifiedStock(getCdStock(state), movement.qty);
       state.movements.pickups.forEach((pickup) => {
         if (pickup.returnBatchId === movement.id) pickup.returnBatchId = null;
       });
@@ -8666,9 +8741,9 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
       Object.assign(movement, cancelInfo);
     } else if (movementType === 'inventory') {
       if (movement.location === 'cd') {
-        state.cdStock = sanitizeQty(movement.previousQty);
+        state.cdStock = unifiedStockQty(movement.previousQty);
       } else if (movement.storeId) {
-        state.storeStocks[movement.storeId] = sanitizeQty(movement.previousQty);
+        state.storeStocks[movement.storeId] = unifiedStockQty(movement.previousQty);
       }
       Object.assign(movement, cancelInfo);
     } else {
@@ -9775,6 +9850,10 @@ function getDivergenceExplanationStatusTag(div) {
   return '<span class="tag warn">Aguardando justificativa</span>';
 }
 
+function divergenceUsesUnifiedTotal(div) {
+  return ['saida_cd_nao_lancada', 'entrega_motorista_loja', 'recebimento_loja', 'retorno_cd', 'frete_goiania_retorno_vinicius', 'inventario_cd', 'inventario_loja'].includes(div?.type);
+}
+
 function getDivergenceQtyLabels(div) {
   if (div.type === 'saida_cd_nao_lancada') {
     return { expected: 'Saída lançada pelo CD', actual: 'Informado pela ponta', diff: 'Pendente CD' };
@@ -9808,7 +9887,7 @@ function getDivergenceRealErrorText(div) {
   const signal = diffTotal > 0 ? '+' : '';
 
   if (diffTotal === 0) {
-    return `O total bateu, mas existe diferença por tipo de caixa entre ${labels.expected.toLowerCase()} e ${labels.actual.toLowerCase()}.`;
+    return divergenceUsesUnifiedTotal(div) ? 'O total informado é igual ao esperado.' : `O total bateu, mas existe diferença entre os setores de envio em ${labels.expected.toLowerCase()} e ${labels.actual.toLowerCase()}.`;
   }
 
   if (div.type === 'saida_cd_nao_lancada') {
@@ -9838,6 +9917,21 @@ function getDivergenceRealErrorText(div) {
 function renderDivergenceDiffRows(div) {
   const previousQty = sanitizeQty(div.expectedQty || emptyQty());
   const countedQty = sanitizeQty(div.actualQty || emptyQty());
+  if (divergenceUsesUnifiedTotal(div)) {
+    const previousTotal = sumQty(previousQty);
+    const countedTotal = sumQty(countedQty);
+    const value = countedTotal - previousTotal;
+    const signal = value > 0 ? '+' : '';
+    const tone = value === 0 ? 'ok' : 'warn';
+    return `
+      <tr>
+        <td>Caixas</td>
+        <td>${previousTotal}</td>
+        <td>${countedTotal}</td>
+        <td>${value === 0 ? statusTag('ok') : `<span class="tag ${tone}">${signal}${value}</span>`}</td>
+      </tr>
+    `;
+  }
   const diff = qtyDiff(countedQty, previousQty);
   return BOX_TYPES.map((item) => {
     const value = signedInt(diff[item.key]);
@@ -9893,12 +9987,12 @@ function renderDivergenceDetailHtml(div) {
         </div>
 
         <div class="detail-section">
-          <h4>Comparativo por tipo de caixa</h4>
+          <h4>${divergenceUsesUnifiedTotal(div) ? 'Comparativo do total de caixas' : 'Comparativo por setor de envio'}</h4>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Tipo de caixa</th>
+                  <th>${divergenceUsesUnifiedTotal(div) ? 'Estoque' : 'Setor de envio'}</th>
                   <th>${labels.expected}</th>
                   <th>${labels.actual}</th>
                   <th>${labels.diff}</th>
@@ -10020,6 +10114,7 @@ function getCorrectionContext(kind, id) {
       mutationType: 'UPDATE_DRIVER_DELIVERY_QTY',
       payloadIdKey: 'driverDeliveryId',
       allowed: canEditDriverDeliveryMovement(item, currentUser, appState),
+      unifiedTotal: true,
     };
   }
 
@@ -10036,6 +10131,7 @@ function getCorrectionContext(kind, id) {
       mutationType: 'UPDATE_RECEIPT_QTY',
       payloadIdKey: 'receiptId',
       allowed: canEditReceiptMovement(item, currentUser, appState),
+      unifiedTotal: true,
     };
   }
 
@@ -10061,7 +10157,7 @@ function renderMovementCorrectionModal(kind, id) {
 
         <form id="form-movement-correction" class="stack" data-kind="${kind}" data-id="${id}" data-prefix="${prefix}">
           <div class="helper-card compact small">${ctx.note}</div>
-          ${qtyInputs(prefix, ctx.qty)}
+          ${ctx.unifiedTotal ? totalQtyInput(prefix, ctx.qty, 'Total corrigido de caixas') : qtyInputs(prefix, ctx.qty)}
           <div class="helper-card compact small">Total corrigido: <strong id="movement-correction-total">${sumQty(ctx.qty)}</strong> caixas</div>
           <label>Motivo da correção
             <textarea name="reason" required placeholder="Ex.: erro de digitação, contagem corrigida, lançamento feito na loja errada, conferência posterior..."></textarea>
@@ -10104,11 +10200,15 @@ function openMovementCorrectionModal(kind, id) {
 
   const refreshTotal = () => {
     if (!form || !prefix || !totalEl) return;
-    totalEl.textContent = sumQty(readQtyFromForm(form, prefix));
+    totalEl.textContent = ctx.unifiedTotal ? readTotalQtyFromForm(form, prefix) : sumQty(readQtyFromForm(form, prefix));
   };
-  BOX_TYPES.forEach((item) => {
-    form?.querySelector(`#${prefix}-${item.key}`)?.addEventListener('input', refreshTotal);
-  });
+  if (ctx.unifiedTotal) {
+    form?.querySelector(`#${prefix}-total`)?.addEventListener('input', refreshTotal);
+  } else {
+    BOX_TYPES.forEach((item) => {
+      form?.querySelector(`#${prefix}-${item.key}`)?.addEventListener('input', refreshTotal);
+    });
+  }
   refreshTotal();
 
   form?.addEventListener('submit', async (event) => {
@@ -10118,12 +10218,13 @@ function openMovementCorrectionModal(kind, id) {
       showToast('Lançamento não encontrado para correção.', 'error');
       return;
     }
-    const qty = readQtyFromForm(form, prefix);
     const reason = form.reason.value.trim();
     const payload = {
       [updatedCtx.payloadIdKey]: id,
-      qty,
       reason,
+      ...(updatedCtx.unifiedTotal
+        ? { totalQty: readTotalQtyFromForm(form, prefix) }
+        : { qty: readQtyFromForm(form, prefix) }),
     };
     const result = await persistMutation(updatedCtx.mutationType, payload, 'Correção salva e divergências recalculadas.');
     if (result.ok) closeModal();
@@ -10347,7 +10448,7 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
         storeId: outbound.storeId,
         routeId: outbound.routeId,
         date: outbound.date,
-        description: `${store?.name || '-'} ainda não confirmou folhagens e bandejas recebidas.`,
+        description: `${store?.name || '-'} ainda não confirmou o total de caixas recebidas.`,
         priority: 'warning',
       }, 'promoterReceipt', context, state));
     }
@@ -10800,8 +10901,7 @@ function renderDashboard() {
   const companyBoxTotals = getCompanyBoxTotals(appState);
   const dashboardMovementUser = promoterCompanyDashboard ? { role: 'viewer' } : currentUser;
   const operationSummary = getDashboardStoreProcessSummary(appState, dashboardMovementUser, todayStr());
-  const dashboardCategoryQty = promoterCompanyDashboard ? companyBoxTotals.byType : (showCdForecast ? appState.cdStock : visibleStoreQty);
-  const dashboardCategoryTotal = Math.max(1, sumQty(dashboardCategoryQty));
+  const dashboardStockTotal = promoterCompanyDashboard ? companyBoxTotals.total : (showCdForecast ? sumQty(getCdStock(appState)) : sumQty(visibleStoreQty));
   const routeSummary = getDashboardRouteSummary(routesForDashboard, dashboardMovementUser, appState, todayStr());
 
   return `
@@ -10843,7 +10943,7 @@ function renderDashboard() {
       ${renderDashboardOperationSummary(operationSummary)}
 
       <div class="cards-grid">
-        ${showCdForecast ? renderMetricCard('Caixas na Empresa', metrics.company, '🏭', metrics.company < forecast.predicted ? 'critical' : 'success', 'Saldo atual confirmado no CD') : ''}
+        ${showCdForecast ? renderMetricCard('Caixas no CD', metrics.company, '🏭', metrics.company < forecast.predicted ? 'critical' : 'success', 'Saldo atual confirmado no CD') : ''}
         ${promoterCompanyDashboard ? renderMetricCard('Caixas Totais da Empresa', companyBoxTotals.total, '🏭', companyBoxTotals.total ? 'success' : 'warning', 'CD + lojas + caixas em retorno') : ''}
         ${renderMetricCard('Enviadas Hoje', metrics.sent, '🚚', 'success', 'Saídas lançadas pelo CD')}
         ${renderMetricCard('Confirmadas nas Lojas', metrics.confirmed, '🏬', 'success', 'Recebimentos confirmados pelos promotores')}
@@ -10859,21 +10959,15 @@ function renderDashboard() {
         <div class="card">
           <div class="section-header">
             <div>
-              <h3>Saldos por Categoria de Caixa</h3>
-              <p>${promoterCompanyDashboard ? 'Saldo total da empresa por folhagens e bandejas.' : (showCdForecast ? 'Saldo atual confirmado no CD por folhagens e bandejas.' : 'Saldo visível para seu acesso por folhagens e bandejas.')}</p>
+              <h3>${promoterCompanyDashboard ? 'Caixas Totais da Empresa' : (showCdForecast ? 'Estoque de Caixas no CD' : 'Estoque de Caixas Visível')}</h3>
+              <p>${promoterCompanyDashboard ? 'Total de caixas da empresa considerando CD, lojas e caixas em retorno.' : (showCdForecast ? 'Saldo geral disponível no Centro de Distribuição, sem separação por setor.' : 'Saldo total de caixas dentro da permissão do seu acesso.')}</p>
             </div>
           </div>
           <div class="list">
-            ${BOX_TYPES.map((item) => {
-              const value = safeInt(dashboardCategoryQty[item.key]);
-              const total = dashboardCategoryTotal;
-              return `
-                <div class="kpi-line">
-                  <div class="kpi-row"><span>${item.label}</span><strong>${value}</strong></div>
-                  <div class="bar"><span style="width:${Math.max(4, (value / total) * 100)}%; background:${item.color}"></span></div>
-                </div>
-              `;
-            }).join('')}
+            <div class="kpi-line">
+              <div class="kpi-row"><span>Total de caixas</span><strong>${dashboardStockTotal}</strong></div>
+              <div class="bar"><span style="width:${dashboardStockTotal > 0 ? 100 : 0}%"></span></div>
+            </div>
           </div>
         </div>
 
@@ -11280,7 +11374,7 @@ function renderSaidas() {
           </div>
           <div class="helper-card">
             <h4>Saldo atual do CD</h4>
-            <div class="small">${BOX_TYPES.map((item) => `${item.label}: <strong>${safeInt(appState.cdStock[item.key])}</strong>`).join(' • ')}</div>
+            <div class="small">Total de caixas: <strong>${sumQty(getCdStock(appState))}</strong></div>
           </div>
         </div>
 
@@ -11413,10 +11507,9 @@ function renderEntregasMotorista() {
             <div class="alert-strip warning">
               <div>
                 <strong>Divergência identificada</strong>
-                <p id="entrega-motorista-alerta" class="muted">Informe o detalhamento para o sistema identificar o erro real.</p>
+                <p id="entrega-motorista-alerta" class="muted">A diferença será registrada somente pelo total de caixas. Informe a justificativa abaixo.</p>
               </div>
             </div>
-            ${qtyInputs('entrega-motorista')}
           </div>
 
           <label>Observação / justificativa
@@ -11471,7 +11564,7 @@ function renderEntregasMotorista() {
               </div>
               <div class="muted">Motorista: ${getUserById(item.driverId)?.name || item.createdBy || '-'}</div>
               <div class="kpi-row"><span>Total deixado</span><strong>${item.totalDelivered} caixas</strong></div>
-              <small class="muted">Correto esperado: ${item.expectedQty.folhagens} folhagens + ${item.expectedQty.bandejas} bandejas = ${sumQty(item.expectedQty)} caixas</small>
+              <small class="muted">Total esperado: ${sumQty(item.expectedQty)} caixas</small>
               ${canEditDriverDeliveryMovement(item) ? `<div class="form-actions"><button type="button" class="btn btn-secondary btn-edit-driver-delivery" data-id="${item.id}">Editar entrega</button></div>` : ''}
             </div>
           `).join('') : `<div class="empty">Nenhuma validação registrada ainda.</div>`}
@@ -11550,10 +11643,9 @@ function renderRecebimentos() {
             <div class="alert-strip warning">
               <div>
                 <strong>Divergência identificada</strong>
-                <p id="recebimento-alerta" class="muted">Informe quantas caixas de folhagens e quantas caixas de bandejas chegaram.</p>
+                <p id="recebimento-alerta" class="muted">A diferença será registrada somente pelo total de caixas. Informe a justificativa abaixo.</p>
               </div>
             </div>
-            ${qtyInputs('recebimento')}
           </div>
 
           <label>Observação / justificativa
@@ -12141,7 +12233,6 @@ function renderEstoque() {
                 <th>Total em loja</th>
                 <th>Limite</th>
                 <th>Status</th>
-                ${BOX_TYPES.map((item) => `<th>${item.label}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
@@ -12152,7 +12243,6 @@ function renderEstoque() {
                   <td><strong>${row.total}</strong></td>
                   <td>${row.store.highStockLimit}</td>
                   <td>${row.isHigh ? statusTag('danger') : statusTag('ok')}</td>
-                  ${BOX_TYPES.map((item) => `<td>${safeInt(row.qty[item.key])}</td>`).join('')}
                 </tr>
               `).join('')}
             </tbody>
@@ -12165,20 +12255,19 @@ function renderEstoque() {
 
 
 function renderInventoryDiffRows(previousQty, countedQty) {
-  const diff = qtyDiff(countedQty, previousQty);
-  return BOX_TYPES.map((item) => {
-    const value = signedInt(diff[item.key]);
-    const signal = value > 0 ? '+' : '';
-    const tone = value === 0 ? 'ok' : 'warn';
-    return `
-      <tr>
-        <td>${item.label}</td>
-        <td>${safeInt(previousQty?.[item.key])}</td>
-        <td>${safeInt(countedQty?.[item.key])}</td>
-        <td>${value === 0 ? statusTag('ok') : `<span class="tag ${tone}">${signal}${value}</span>`}</td>
-      </tr>
-    `;
-  }).join('');
+  const previousTotal = sumQty(sanitizeQty(previousQty));
+  const countedTotal = sumQty(sanitizeQty(countedQty));
+  const value = countedTotal - previousTotal;
+  const signal = value > 0 ? '+' : '';
+  const tone = value === 0 ? 'ok' : 'warn';
+  return `
+    <tr>
+      <td>Caixas</td>
+      <td>${previousTotal}</td>
+      <td>${countedTotal}</td>
+      <td>${value === 0 ? statusTag('ok') : `<span class="tag ${tone}">${signal}${value}</span>`}</td>
+    </tr>
+  `;
 }
 
 
@@ -12308,7 +12397,7 @@ function renderInventario() {
                 <input type="text" class="locked-date-input" value="${formatDateBR(todayStr())}" readonly aria-readonly="true" />
                 <input type="hidden" name="date" value="${todayStr()}" />
               </label>
-              ${qtyInputs('inventario-promotor', currentQty)}
+              ${totalQtyInput('inventario-promotor', currentQty, 'Total de caixas encontradas na loja')}
               <label>Observação
                 <textarea name="notes" placeholder="Exemplo: contagem física realizada no fechamento da loja."></textarea>
               </label>
@@ -12426,7 +12515,7 @@ function renderInventario() {
             </div>
             <div class="helper-card small">
               Saldo atual no CD: <strong>${sumQty(appState.cdStock)}</strong> caixas<br>
-              ${BOX_TYPES.map((item) => `${item.label}: <strong>${safeInt(appState.cdStock[item.key])}</strong>`).join(' • ')}
+              Saldo único, sem separação por folhagens ou bandejas.
             </div>
           </div>
 
@@ -12435,7 +12524,7 @@ function renderInventario() {
               <input type="text" class="locked-date-input" value="${formatDateBR(todayStr())}" readonly aria-readonly="true" />
               <input type="hidden" name="date" value="${todayStr()}" />
             </label>
-            ${qtyInputs('inventario-cd', appState.cdStock)}
+            ${totalQtyInput('inventario-cd', appState.cdStock, 'Total de caixas encontradas no CD')}
             <label>Observação / motivo do ajuste
               <textarea name="notes" placeholder="Exemplo: inventário físico semanal no CD."></textarea>
             </label>
@@ -12472,7 +12561,7 @@ function renderInventario() {
               </label>
             </div>
             <div id="inventario-store-current" class="helper-card small">Selecione uma loja para carregar o saldo atual do sistema.</div>
-            ${qtyInputs('inventario-loja')}
+            ${totalQtyInput('inventario-loja', 0, 'Total de caixas encontradas na loja')}
             <label>Observação / motivo do ajuste
               <textarea name="notes" placeholder="Exemplo: inventário físico realizado pelo promotor/motorista."></textarea>
             </label>
@@ -12505,7 +12594,7 @@ function renderInventario() {
                   <small class="muted">${item.justification || 'Sem observação.'}</small>
                   <div class="table-wrap">
                     <table>
-                      <thead><tr><th>Caixa</th><th>Sistema</th><th>Físico</th><th>Diferença</th></tr></thead>
+                      <thead><tr><th>Estoque</th><th>Sistema</th><th>Físico</th><th>Diferença</th></tr></thead>
                       <tbody>${renderInventoryDiffRows(item.expectedQty || emptyQty(), item.actualQty || emptyQty())}</tbody>
                     </table>
                   </div>
@@ -12601,15 +12690,13 @@ function renderBulkStoreInventoryCard() {
                 <th><input type="checkbox" id="bulk-inventory-select-all" title="Selecionar todas as lojas exibidas" /></th>
                 <th>Loja</th>
                 <th>Rede / rota</th>
-                <th>Atual folhagens</th>
-                <th>Atual bandejas</th>
-                <th>Corrigir folhagens</th>
-                <th>Corrigir bandejas</th>
+                <th>Saldo atual</th>
+                <th>Contagem física</th>
                 <th>Diferença</th>
               </tr>
             </thead>
             <tbody id="bulk-inventory-rows">
-              <tr><td colspan="8" class="center muted">Nenhuma loja carregada ainda.</td></tr>
+              <tr><td colspan="6" class="center muted">Nenhuma loja carregada ainda.</td></tr>
             </tbody>
           </table>
         </div>
@@ -14652,12 +14739,7 @@ function bindEntregasMotoristaEvents() {
 
   const getSelectedOutbound = () => appState.movements.outbounds.find((item) => item.id === outboundSelect.value);
 
-  const clearDriverDetailInputs = () => {
-    BOX_TYPES.forEach((item) => {
-      const input = form.querySelector(`#entrega-motorista-${item.key}`);
-      if (input) input.value = 0;
-    });
-  };
+  const clearDriverDetailInputs = () => {};
 
   const refresh = () => {
     const outbound = getSelectedOutbound();
@@ -14700,7 +14782,7 @@ function bindEntregasMotoristaEvents() {
       Total informado pelo motorista: <strong>${total} caixas</strong><br>
       <span class="tag danger">Divergência de ${signal}${diff} caixa(s)</span>
     `;
-    alertText.textContent = `Motorista informou ${total} caixas. Correto esperado: ${expectedTotal}. Diferença: ${signal}${diff}. Informe folhagens e bandejas. Correto para a loja: ${outbound.qty.folhagens} folhagens e ${outbound.qty.bandejas} bandejas.`;
+    alertText.textContent = `Motorista informou ${total} caixas. Total esperado: ${expectedTotal}. Diferença: ${signal}${diff}. A divergência será registrada pelo total de caixas.`;
   };
 
   outboundSelect.addEventListener('change', () => {
@@ -14719,13 +14801,10 @@ function bindEntregasMotoristaEvents() {
       return;
     }
     const totalDelivered = safeInt(form.totalDelivered.value);
-    const expectedTotal = sumQty(outbound.qty);
-    const hasDiff = totalDelivered !== expectedTotal;
     const payload = {
       outboundId: form.outboundId.value,
       date: todayStr(),
       totalDelivered,
-      actualQty: hasDiff ? readQtyFromForm(form, 'entrega-motorista') : outbound.qty,
       notes: form.notes.value.trim(),
     };
     const result = await persistMutation('CONFIRM_DRIVER_DELIVERY', payload, 'Entrega do motorista validada.');
@@ -14765,12 +14844,7 @@ function bindRecebimentosEvents() {
     return candidates.find((item) => item.id === outboundSelect?.value) || null;
   };
 
-  const clearReceiptInputs = () => {
-    BOX_TYPES.forEach((item) => {
-      const input = form.querySelector(`#recebimento-${item.key}`);
-      if (input) input.value = 0;
-    });
-  };
+  const clearReceiptInputs = () => {};
 
   const renderOutboundOptions = (candidates) => {
     if (!outboundSelect || !outboundChoice) return;
@@ -14857,7 +14931,7 @@ function bindRecebimentosEvents() {
       CD lançou: <strong>${expectedTotal} caixas</strong> • Loja informou: <strong>${total} caixas</strong><br>
       <span class="tag danger">Divergência de ${signal}${diff} caixa(s)</span>
     `;
-    if (alertText) alertText.textContent = `Loja informou ${total} caixas. Correto esperado: ${expectedTotal}. Diferença: ${signal}${diff}. Informe folhagens e bandejas. Correto para a loja: ${outbound.qty.folhagens} folhagens e ${outbound.qty.bandejas} bandejas.`;
+    if (alertText) alertText.textContent = `Loja informou ${total} caixas. Total esperado: ${expectedTotal}. Diferença: ${signal}${diff}. A divergência será registrada pelo total de caixas.`;
   };
 
   storeSelect?.addEventListener('change', () => {
@@ -14890,13 +14964,10 @@ function bindRecebimentosEvents() {
     }
 
     if (outbound) {
-      const expectedTotal = sumQty(outbound.qty);
-      const hasDiff = totalReceived !== expectedTotal;
       const payload = {
         outboundId: outbound.id,
         date: todayStr(),
         totalReceived,
-        qty: hasDiff ? readQtyFromForm(form, 'recebimento') : outbound.qty,
         justification,
       };
       const result = await persistMutation('CONFIRM_RECEIPT', payload, 'Recebimento confirmado com sucesso.');
@@ -15862,7 +15933,7 @@ function bindInventarioEvents() {
       const payload = {
         location: 'cd',
         date: todayStr(),
-        qty: readQtyFromForm(formCd, 'inventario-cd'),
+        totalQty: readTotalQtyFromForm(formCd, 'inventario-cd'),
         notes: formCd.notes.value.trim(),
       };
       const result = await persistMutation('APPLY_INVENTORY', payload, 'Inventário do CD aplicado com sucesso.');
@@ -15879,16 +15950,16 @@ function bindInventarioEvents() {
     const storeId = storeSelect.value;
     if (!storeId) {
       storeInfo.innerHTML = 'Selecione uma loja para carregar o saldo atual do sistema.';
-      fillQtyInputs('inventario-loja', emptyQty());
+      fillTotalQtyInput('inventario-loja', 0);
       return;
     }
     const qty = getStoreStock(storeId);
     storeInfo.innerHTML = `
       <strong>${getStoreById(storeId)?.name || '-'}</strong><br>
       Saldo atual no sistema: <strong>${sumQty(qty)} caixas</strong><br>
-      ${BOX_TYPES.map((item) => `${item.label}: <strong>${qty[item.key]}</strong>`).join(' • ')}
+      Saldo único de caixas, sem separação por setor.
     `;
-    fillQtyInputs('inventario-loja', qty);
+    fillTotalQtyInput('inventario-loja', qty);
   };
 
   const refreshInventoryStoreOptions = () => {
@@ -15916,7 +15987,7 @@ function bindInventarioEvents() {
         location: 'store',
         date: todayStr(),
         storeId: formStore.storeId.value,
-        qty: readQtyFromForm(formStore, 'inventario-loja'),
+        totalQty: readTotalQtyFromForm(formStore, 'inventario-loja'),
         notes: formStore.notes.value.trim(),
       };
       const result = await persistMutation('APPLY_INVENTORY', payload, 'Inventário da loja aplicado com sucesso.');
@@ -15947,20 +16018,14 @@ function bindInventarioEvents() {
 
   const updateBulkRowDiff = (row) => {
     if (!row) return;
-    const current = {
-      folhagens: safeInt(row.dataset.currentFolhagens),
-      bandejas: safeInt(row.dataset.currentBandejas),
-    };
-    const counted = {
-      folhagens: safeInt(row.querySelector('[data-box="folhagens"]')?.value),
-      bandejas: safeInt(row.querySelector('[data-box="bandejas"]')?.value),
-    };
-    const diff = qtyDiff(counted, current);
-    const changed = hasQtyDifference(current, counted);
+    const currentTotal = safeInt(row.dataset.currentTotal);
+    const countedTotal = safeInt(row.querySelector('[data-box="total"]')?.value);
+    const diff = countedTotal - currentTotal;
+    const changed = currentTotal !== countedTotal;
     row.dataset.changed = changed ? '1' : '0';
     const diffCell = row.querySelector('.bulk-inventory-diff');
     if (diffCell) {
-      diffCell.innerHTML = changed ? `<strong>${formatSignedQtyCompact(diff)}</strong>` : '<span class="muted">Sem alteração</span>';
+      diffCell.innerHTML = changed ? `<strong>${diff > 0 ? '+' : ''}${diff}</strong>` : '<span class="muted">Sem alteração</span>';
     }
     if (changed) {
       row.classList.add('bulk-inventory-changed');
@@ -15983,7 +16048,7 @@ function bindInventarioEvents() {
     if (!bulkRows) return;
     const stores = getBulkFilteredStores();
     if (!stores.length) {
-      bulkRows.innerHTML = '<tr><td colspan="8" class="center muted">Nenhuma loja encontrada para o filtro selecionado.</td></tr>';
+      bulkRows.innerHTML = '<tr><td colspan="6" class="center muted">Nenhuma loja encontrada para o filtro selecionado.</td></tr>';
       refreshBulkSummary();
       return;
     }
@@ -15991,14 +16056,12 @@ function bindInventarioEvents() {
       const qty = getStoreStock(store.id);
       const route = getRouteById(getEffectiveRoute(store.id, todayStr()));
       return `
-        <tr class="bulk-inventory-row" data-store-id="${store.id}" data-current-folhagens="${safeInt(qty.folhagens)}" data-current-bandejas="${safeInt(qty.bandejas)}" data-changed="0">
+        <tr class="bulk-inventory-row" data-store-id="${store.id}" data-current-total="${sumQty(qty)}" data-changed="0">
           <td><input type="checkbox" class="bulk-inventory-check" /></td>
           <td><strong>${escapeHtml(store.name)}</strong></td>
           <td><small>${escapeHtml(inferStoreNetwork(store))}<br>${escapeHtml(route?.name || '-')}</small></td>
-          <td>${safeInt(qty.folhagens)}</td>
-          <td>${safeInt(qty.bandejas)}</td>
-          <td><input type="number" min="0" step="1" data-box="folhagens" value="${safeInt(qty.folhagens)}" /></td>
-          <td><input type="number" min="0" step="1" data-box="bandejas" value="${safeInt(qty.bandejas)}" /></td>
+          <td>${sumQty(qty)}</td>
+          <td><input type="number" min="0" step="1" data-box="total" value="${sumQty(qty)}" /></td>
           <td class="bulk-inventory-diff"><span class="muted">Sem alteração</span></td>
         </tr>
       `;
@@ -16061,10 +16124,7 @@ function bindInventarioEvents() {
       }
       const items = selectedRows.map((row) => ({
         storeId: row.dataset.storeId,
-        qty: {
-          folhagens: safeInt(row.querySelector('[data-box="folhagens"]')?.value),
-          bandejas: safeInt(row.querySelector('[data-box="bandejas"]')?.value),
-        },
+        totalQty: safeInt(row.querySelector('[data-box="total"]')?.value),
       }));
       const result = await persistMutation('APPLY_BULK_STORE_INVENTORY', {
         date: todayStr(),
@@ -16087,9 +16147,9 @@ function bindInventarioEvents() {
     promoterStoreInfo.innerHTML = `
       <strong>${getStoreById(storeId)?.name || '-'}</strong><br>
       Saldo atual no sistema: <strong>${sumQty(qty)}</strong> caixas<br>
-      ${BOX_TYPES.map((item) => `${item.label}: <strong>${qty[item.key]}</strong>`).join(' • ')}
+      Saldo único de caixas, sem separação por setor.
     `;
-    fillQtyInputs('inventario-promotor', qty);
+    fillTotalQtyInput('inventario-promotor', qty);
   };
   if (formPromoter) {
     promoterStoreSelect?.addEventListener('change', refreshPromoterStoreInventory);
@@ -16100,7 +16160,7 @@ function bindInventarioEvents() {
         location: 'store',
         date: todayStr(),
         storeId: formPromoter.storeId.value,
-        qty: readQtyFromForm(formPromoter, 'inventario-promotor'),
+        totalQty: readTotalQtyFromForm(formPromoter, 'inventario-promotor'),
         notes: formPromoter.notes.value.trim(),
       };
       const result = await persistMutation('APPLY_INVENTORY', payload, 'Inventário da loja salvo com sucesso.');
