@@ -40,9 +40,17 @@ const GOIANIA_TRUNK_ROUTE_ID = 'rota_goiania_vinicius';
 const GOIANIA_TRUNK_DRIVER_IDS = ['user_motor_vinicius', 'user_motor_sebastiao'];
 const SUPPORT_POINT_STORE_ID = 'loja_fazenda_neropolis_sr_carlinhos';
 const SUPPORT_POINT_ROUTE_ID = 'rota_ponto_apoio_neropolis';
-// Classificação aprovada para o painel: rotas de Goiânia + ponto de apoio.
-// Todas as demais lojas pertencem à Regional DF para fins de acompanhamento.
+// Classificação aprovada para acompanhamento regional.
+// Além das rotas de Goiânia e do ponto de apoio, estas lojas pertencem
+// explicitamente à Regional Goiânia, independentemente do nome da rota.
 const REGIONAL_GOIANIA_ROUTE_IDS = new Set([...GOIANIA_ROUTE_IDS, SUPPORT_POINT_ROUTE_ID]);
+const REGIONAL_GOIANIA_STORE_IDS = new Set([
+  SUPPORT_POINT_STORE_ID,
+  'loja_dia_a_dia_itumbiara',
+  'loja_dia_a_dia_lem',
+  'loja_dia_a_dia_gurupi',
+  'loja_dia_a_dia_goianesia',
+]);
 const RELIEF_DRIVER_CAIO_USER = {
   id: 'user_motor_caio',
   name: 'Caio',
@@ -4158,7 +4166,7 @@ const PUBLIC_DASHBOARD_USER = {
 };
 let currentView = 'dashboard';
 let backendMode = 'local';
-const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '', separatorEditorId: '', separatorEditorNetwork: '', separatorEditorSearch: '', folhagensSeparatorId: '', folhagensSeparatorDate: todayStr() };
+const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', pendenciaDate: todayStr(), pendenciaGroup: '', pendenciaResponsible: '', pendenciaType: '', pendenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '', separatorEditorId: '', separatorEditorNetwork: '', separatorEditorSearch: '', folhagensSeparatorId: '', folhagensSeparatorDate: todayStr() };
 let firebaseDb = null;
 let firebaseRootRef = null;
 let unsubscribeFirebase = null;
@@ -5525,15 +5533,8 @@ function findOwnerUser(owner, state = appState) {
 }
 
 function isGoianiaContext(context = {}, state = appState) {
-  if (context.routeId && (isGoianiaRoute(context.routeId) || context.routeId === SUPPORT_POINT_ROUTE_ID)) return true;
-  if (context.storeId === SUPPORT_POINT_STORE_ID) return true;
-  const store = context.storeId ? getStoreById(context.storeId, state) : null;
-  return !!store && (
-    store.defaultRouteId === SUPPORT_POINT_ROUTE_ID
-    || store.sundayRouteId === SUPPORT_POINT_ROUTE_ID
-    || isGoianiaRoute(store.defaultRouteId)
-    || isGoianiaRoute(store.sundayRouteId)
-  );
+  if (context.storeId && getStoreRegionalKey(context.storeId, state) === 'goiania') return true;
+  return !!context.routeId && (isGoianiaRoute(context.routeId) || context.routeId === SUPPORT_POINT_ROUTE_ID);
 }
 
 function getPendencyOwner(kind, context = {}, state = appState) {
@@ -9255,10 +9256,10 @@ function enhanceMobileTables() {
 function getStoreRegionalKey(storeId, state = appState) {
   const store = getStoreById(storeId, state);
   if (!store) return 'df';
-  if (store.id === SUPPORT_POINT_STORE_ID) return 'goiania';
+  if (REGIONAL_GOIANIA_STORE_IDS.has(store.id)) return 'goiania';
 
   // A regional é uma característica estável da loja. Trocas temporárias de rota
-  // não alteram sua regional no dashboard.
+  // não alteram sua classificação.
   const registeredRouteIds = [store.defaultRouteId, store.sundayRouteId].filter(Boolean);
   return registeredRouteIds.some((routeId) => REGIONAL_GOIANIA_ROUTE_IDS.has(routeId))
     ? 'goiania'
@@ -13077,55 +13078,284 @@ function renderFechamento() {
 }
 
 
+function getPendencyGroupKey(item, state = appState) {
+  const area = normalizeText(item?.area || '');
+  const isStoreResponsibility = item?.responsibleRole === 'promoter'
+    || area.includes('recebimento na loja')
+    || area.includes('inventario obrigatorio');
+
+  if (isStoreResponsibility && item?.storeId) {
+    return getStoreRegionalKey(item.storeId, state) === 'goiania' ? 'storesGoiania' : 'storesDf';
+  }
+
+  const isLogisticsResponsibility = item?.responsibleRole === 'driver'
+    || area.includes('entrega do motorista')
+    || area.includes('entrega vencida do motorista')
+    || area.includes('distribuicao goiania');
+
+  return isLogisticsResponsibility ? 'logistics' : 'cd';
+}
+
+function getPendencyGroupMeta(groupKey) {
+  return {
+    cd: { label: 'Pendências do CD', icon: '🏭', description: 'Saídas, retornos e conferências do CD.' },
+    logistics: { label: 'Pendências da Logística', icon: '🚚', description: 'Entregas e distribuição dos motoristas.' },
+    storesDf: { label: 'Lojas — Regional DF', icon: '🏬', description: 'Recebimentos e inventários das lojas da Regional DF.' },
+    storesGoiania: { label: 'Lojas — Regional Goiânia', icon: '📍', description: 'Recebimentos e inventários das lojas da Regional Goiânia.' },
+  }[groupKey] || { label: 'Pendências', icon: '📌', description: '' };
+}
+
+function getPendencyTargetView(item) {
+  const area = normalizeText(item?.area || '');
+  if (area.includes('saida do cd')) return 'saidas';
+  if (area.includes('distribuicao goiania')) return 'distribuicaoGoiania';
+  if (area.includes('entrega do motorista')) return 'entregasMotorista';
+  if (area.includes('recebimento na loja')) return 'recebimentos';
+  if (area.includes('retorno no cd')) return 'retornos';
+  if (area.includes('inventario')) return 'inventario';
+  if (area.includes('divergencia') || area.includes('aprovacao adm') || area.includes('justificar')) return 'divergencias';
+  return 'dashboard';
+}
+
+function getPendencyPriorityMeta(item) {
+  if (item?.priority === 'danger') return { label: 'Urgente', className: 'danger' };
+  if (item?.priority === 'info') return { label: 'Normal', className: 'info' };
+  return { label: 'Atenção', className: 'warning' };
+}
+
 function renderPendencias() {
-  const date = todayStr();
-  const pendencies = getVisiblePendenciesForCurrentUser(date);
-  const PENDING_RENDER_LIMIT_PER_OWNER = 60;
-  const byResponsible = {};
-  pendencies.forEach((item) => {
-    const key = item.ownerName || item.responsibleName || item.responsibleRole || 'Responsável';
-    byResponsible[key] = byResponsible[key] || { ownerArea: item.ownerArea || '', ownerReason: item.ownerReason || '', items: [] };
-    byResponsible[key].items.push(item);
+  const selectedDate = viewFilters.pendenciaDate || todayStr();
+  const allPendencies = getVisiblePendenciesForCurrentUser(selectedDate);
+  const groupsOrder = ['cd', 'logistics', 'storesDf', 'storesGoiania'];
+  const groups = Object.fromEntries(groupsOrder.map((key) => [key, []]));
+
+  allPendencies.forEach((item) => {
+    const groupKey = getPendencyGroupKey(item);
+    groups[groupKey].push(item);
   });
-  return `
-    <div class="stack">
-      <div class="card">
-        <div class="page-header">
-          <div>
-            <h3>Pendências por responsável</h3>
-            <p class="muted">Cada pendência mostra o dono de gestão responsável por cobrar e regularizar. A tela abre leve: grupos muito grandes exibem os primeiros ${PENDING_RENDER_LIMIT_PER_OWNER} itens.</p>
-          </div>
-          <div class="helper-card small">Total visível para seu acesso: <strong>${pendencies.length}</strong></div>
+
+  const responsibleOptions = [...new Set(allPendencies.flatMap((item) => [item.responsibleName, item.ownerName]).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const typeOptions = [...new Set(allPendencies.map((item) => item.area).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const selectedGroup = viewFilters.pendenciaGroup || '';
+  const responsibleFilter = viewFilters.pendenciaResponsible || '';
+  const typeFilter = viewFilters.pendenciaType || '';
+  const searchFilter = normalizeText(viewFilters.pendenciaSearch || '');
+
+  const matchesFilters = (item) => {
+    if (responsibleFilter && item.responsibleName !== responsibleFilter && item.ownerName !== responsibleFilter) return false;
+    if (typeFilter && item.area !== typeFilter) return false;
+    if (searchFilter) {
+      const store = getStoreById(item.storeId);
+      const route = getRouteById(item.routeId);
+      const network = store ? inferStoreNetwork(store) : '';
+      const haystack = normalizeText(`${item.area || ''} ${item.description || ''} ${store?.name || ''} ${route?.name || ''} ${network} ${item.responsibleName || ''} ${item.ownerName || ''}`);
+      if (!haystack.includes(searchFilter)) return false;
+    }
+    return true;
+  };
+
+  const visibleGroupKeys = selectedGroup ? [selectedGroup] : groupsOrder;
+  const filteredGroups = Object.fromEntries(groupsOrder.map((key) => [key, groups[key].filter(matchesFilters)]));
+  const filteredTotal = visibleGroupKeys.reduce((sum, key) => sum + filteredGroups[key].length, 0);
+  const RENDER_LIMIT = 180;
+  let renderedCount = 0;
+
+  const renderPendencyRow = (item) => {
+    renderedCount += 1;
+    const store = getStoreById(item.storeId);
+    const route = getRouteById(item.routeId);
+    const network = store ? inferStoreNetwork(store) : '';
+    const regional = item.storeId ? (getStoreRegionalKey(item.storeId) === 'goiania' ? 'Regional Goiânia' : 'Regional DF') : '';
+    const priority = getPendencyPriorityMeta(item);
+    const targetView = getPendencyTargetView(item);
+    const isOverdue = !!item.date && item.date < todayStr();
+    const canOpenTarget = canAccessView(targetView, currentUser);
+    return `
+      <article class="pendency-row priority-${priority.className}">
+        <div class="pendency-row-status">
+          <span class="pendency-priority ${priority.className}">${priority.label}</span>
+          ${isOverdue ? '<span class="pendency-overdue">Dia anterior</span>' : ''}
         </div>
-        ${pendencies.length ? Object.entries(byResponsible).map(([name, group]) => {
-          const visibleItems = group.items.slice(0, PENDING_RENDER_LIMIT_PER_OWNER);
-          return `
-          <div class="responsible-group">
-            <div class="list-item-head">
-              <div>
-                <h4>${escapeHtml(name)}${group.ownerArea ? ` — ${escapeHtml(group.ownerArea)}` : ''}</h4>
-                ${group.ownerReason ? `<small class="muted">${escapeHtml(group.ownerReason)}</small>` : ''}
-              </div>
-              <span class="badge-count">${group.items.length}</span>
-            </div>
-            <div class="list">
-              ${visibleItems.map((item) => `
-                <div class="list-item">
-                  <div class="list-item-head">
-                    <strong>${escapeHtml(item.area)}</strong>
-                    ${item.priority === 'danger' ? statusTag('danger') : item.priority === 'info' ? statusTag('info') : statusTag('warn')}
-                  </div>
-                  <p>${escapeHtml(item.description)}</p>
-                  <small class="muted">Operacional: ${escapeHtml(item.responsibleName || '-')} • Loja: ${escapeHtml(getStoreById(item.storeId)?.name || '-')} • Rota: ${escapeHtml(getRouteById(item.routeId)?.name || '-')} ${item.date ? `• Data: ${formatDateBR(item.date)}` : ''}</small>
-                </div>
-              `).join('')}
-              ${group.items.length > visibleItems.length ? `<div class="helper-card small">Mostrando ${visibleItems.length} de ${group.items.length} pendências deste responsável. Use Divergências/Retornos/Inventário para regularizar em lote por data, rota, loja ou tipo.</div>` : ''}
-            </div>
+        <div class="pendency-row-content">
+          <div class="pendency-row-title">
+            <strong>${escapeHtml(item.area || 'Pendência operacional')}</strong>
+            <span>${escapeHtml(store?.name || item.responsibleName || 'Operação geral')}</span>
           </div>
-        `}).join('') : `<div class="empty">Nenhuma pendência para o seu acesso nesta data.</div>`}
+          <p>${escapeHtml(item.description || '')}</p>
+          <div class="pendency-meta-list">
+            ${regional ? `<span>${escapeHtml(regional)}</span>` : ''}
+            ${network ? `<span>${escapeHtml(network)}</span>` : ''}
+            ${route?.name ? `<span>Rota: ${escapeHtml(route.name)}</span>` : ''}
+            <span>Responsável: ${escapeHtml(item.responsibleName || item.ownerName || '-')}</span>
+            ${item.ownerName && item.ownerName !== item.responsibleName ? `<span>Gestão: ${escapeHtml(item.ownerName)}</span>` : ''}
+            ${item.date ? `<span>${formatDateBR(item.date)}</span>` : ''}
+          </div>
+        </div>
+        <div class="pendency-row-action">
+          ${canOpenTarget ? `<button type="button" class="btn btn-ghost btn-open-pendency" data-target-view="${targetView}">Abrir</button>` : ''}
+        </div>
+      </article>
+    `;
+  };
+
+  return `
+    <div class="stack pendency-center">
+      <div class="card pendency-summary-card">
+        <div class="page-header pendency-page-header">
+          <div>
+            <h3>Central de Pendências</h3>
+            <p class="muted">Veja rapidamente onde a operação está parada e quem precisa agir.</p>
+          </div>
+          <div class="pendency-total-box">
+            <span>Total na data</span>
+            <strong>${allPendencies.length}</strong>
+          </div>
+        </div>
+
+        <div class="pendency-group-grid">
+          ${groupsOrder.map((key) => {
+            const meta = getPendencyGroupMeta(key);
+            return `
+              <button type="button" class="pendency-group-card ${selectedGroup === key ? 'active' : ''}" data-pendency-group="${key}">
+                <span class="pendency-group-icon">${meta.icon}</span>
+                <span class="pendency-group-copy">
+                  <strong>${meta.label}</strong>
+                  <small>${meta.description}</small>
+                </span>
+                <span class="pendency-group-count">${groups[key].length}</span>
+              </button>
+            `;
+          }).join('')}
+        </div>
+
+        <form id="form-pendency-filter" class="pendency-filter-bar">
+          <label>Data operacional
+            <input type="date" name="date" value="${escapeHtml(selectedDate)}" />
+          </label>
+          <label>Responsável
+            <select name="responsible">
+              <option value="">Todos</option>
+              ${responsibleOptions.map((name) => `<option value="${escapeHtml(name)}" ${name === responsibleFilter ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Tipo de pendência
+            <select name="type">
+              <option value="">Todos</option>
+              ${typeOptions.map((type) => `<option value="${escapeHtml(type)}" ${type === typeFilter ? 'selected' : ''}>${escapeHtml(type)}</option>`).join('')}
+            </select>
+          </label>
+          <label class="pendency-search-label">Buscar
+            <input type="search" name="search" value="${escapeHtml(viewFilters.pendenciaSearch || '')}" placeholder="Loja, rota ou rede" />
+          </label>
+          <div class="pendency-filter-actions">
+            <button type="submit" class="btn btn-secondary">Filtrar</button>
+            <button type="button" class="btn btn-ghost" id="btn-clear-pendency-filter">Limpar</button>
+          </div>
+        </form>
+
+        ${selectedGroup ? `
+          <div class="pendency-active-filter">
+            <span>Exibindo: <strong>${getPendencyGroupMeta(selectedGroup).label}</strong></span>
+            <button type="button" class="btn btn-ghost btn-small" id="btn-show-all-pendencies">Ver todas</button>
+          </div>
+        ` : ''}
       </div>
+
+      <div class="pendency-results-header">
+        <div>
+          <h3>${selectedGroup ? getPendencyGroupMeta(selectedGroup).label : 'Pendências da operação'}</h3>
+          <p class="muted">${filteredTotal} resultado(s) conforme os filtros.</p>
+        </div>
+      </div>
+
+      ${filteredTotal ? visibleGroupKeys.map((key) => {
+        const items = filteredGroups[key]
+          .sort((a, b) => {
+            const overdueDiff = Number((b.date || '') < todayStr()) - Number((a.date || '') < todayStr());
+            if (overdueDiff) return overdueDiff;
+            const priorityOrder = { danger: 0, warning: 1, info: 2 };
+            const priorityDiff = (priorityOrder[a.priority] ?? 1) - (priorityOrder[b.priority] ?? 1);
+            if (priorityDiff) return priorityDiff;
+            return String(a.date || '').localeCompare(String(b.date || ''));
+          });
+        if (!items.length || renderedCount >= RENDER_LIMIT) return '';
+        const remainingCapacity = RENDER_LIMIT - renderedCount;
+        const visibleItems = items.slice(0, remainingCapacity);
+        const meta = getPendencyGroupMeta(key);
+        return `
+          <section class="card pendency-section">
+            <div class="pendency-section-header">
+              <div>
+                <h4>${meta.icon} ${meta.label}</h4>
+                <p>${meta.description}</p>
+              </div>
+              <span class="badge-count">${items.length}</span>
+            </div>
+            <div class="pendency-list-clean">
+              ${visibleItems.map(renderPendencyRow).join('')}
+            </div>
+            ${items.length > visibleItems.length ? `<div class="helper-card small">Mostrando ${visibleItems.length} de ${items.length} itens deste grupo. Use os filtros para localizar uma pendência específica.</div>` : ''}
+          </section>
+        `;
+      }).join('') : `<div class="card"><div class="empty">Nenhuma pendência encontrada com esses filtros.</div></div>`}
+
+      ${filteredTotal > RENDER_LIMIT ? `<div class="helper-card small">A tela mostra até ${RENDER_LIMIT} pendências por vez para permanecer rápida. Refine os filtros para encontrar os demais registros.</div>` : ''}
     </div>
   `;
+}
+
+function bindPendenciasEvents() {
+  const filterForm = document.getElementById('form-pendency-filter');
+  const applyFilters = () => {
+    if (!filterForm) return;
+    viewFilters.pendenciaDate = filterForm.elements.date?.value || todayStr();
+    viewFilters.pendenciaResponsible = filterForm.elements.responsible?.value || '';
+    viewFilters.pendenciaType = filterForm.elements.type?.value || '';
+    viewFilters.pendenciaSearch = filterForm.elements.search?.value || '';
+    render();
+  };
+
+  filterForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    applyFilters();
+  });
+
+  filterForm?.elements.date?.addEventListener('change', () => {
+    viewFilters.pendenciaDate = filterForm.elements.date.value || todayStr();
+    viewFilters.pendenciaResponsible = '';
+    viewFilters.pendenciaType = '';
+    render();
+  });
+  filterForm?.elements.responsible?.addEventListener('change', applyFilters);
+  filterForm?.elements.type?.addEventListener('change', applyFilters);
+
+  document.querySelectorAll('[data-pendency-group]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const group = button.dataset.pendencyGroup || '';
+      viewFilters.pendenciaGroup = viewFilters.pendenciaGroup === group ? '' : group;
+      render();
+    });
+  });
+
+  document.getElementById('btn-show-all-pendencies')?.addEventListener('click', () => {
+    viewFilters.pendenciaGroup = '';
+    render();
+  });
+
+  document.getElementById('btn-clear-pendency-filter')?.addEventListener('click', () => {
+    viewFilters.pendenciaDate = todayStr();
+    viewFilters.pendenciaGroup = '';
+    viewFilters.pendenciaResponsible = '';
+    viewFilters.pendenciaType = '';
+    viewFilters.pendenciaSearch = '';
+    render();
+  });
+
+  document.querySelectorAll('.btn-open-pendency').forEach((button) => {
+    button.addEventListener('click', () => navigateToView(button.dataset.targetView || 'dashboard'));
+  });
 }
 
 function renderEstornos() {
@@ -14396,6 +14626,7 @@ function bindViewEvents() {
   if (currentView === 'caixasLiberadas') bindCaixasLiberadasEvents();
   if (currentView === 'retornos') bindRetornosEvents();
   if (currentView === 'fechamento') bindFechamentoEvents();
+  if (currentView === 'pendencias') bindPendenciasEvents();
   if (currentView === 'estornos') bindEstornosEvents();
   if (currentView === 'rotas') bindRotasEvents();
   if (currentView === 'lojas') bindLojasEvents();
