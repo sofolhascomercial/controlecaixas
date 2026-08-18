@@ -4083,6 +4083,8 @@ const VIEW_META = {
   cargaGoiania: { title: 'Carga Goiânia', subtitle: 'Validação da carga total do caminhão Vinicius/Sebastião' },
   distribuicaoGoiania: { title: 'Distribuição Goiânia', subtitle: 'Transbordo para Maycon, Alexsandro, Edmar, Vinicius ou reforço' },
   relatorios: { title: 'Relatórios', subtitle: 'Visão gerencial por loja, rota e usuário' },
+  exportacaoMassa: { title: 'Exportação em Massa', subtitle: 'Exportar resumos de caixas para Excel por período, rede e loja' },
+  planilhasOperacionais: { title: 'Planilhas Operacionais', subtitle: 'Importação em massa por responsável com validação automática no Dashboard' },
   usuarios: { title: 'Usuários', subtitle: 'Contas de acesso e permissões do sistema' },
   configuracoes: { title: 'Configurações', subtitle: 'Parâmetros de estoque crítico, segurança e limites' },
 };
@@ -4111,6 +4113,8 @@ const NAV_ITEMS = [
   { key: 'cargaGoiania', label: 'Carga Goiânia', roles: ['admin', 'driver', 'cd'] },
   { key: 'distribuicaoGoiania', label: 'Distribuição Goiânia', roles: ['admin', 'driver', 'cd'] },
   { key: 'relatorios', label: 'Relatórios', roles: ['admin'] },
+  { key: 'exportacaoMassa', label: 'Exportação em Massa', roles: ['admin'] },
+  { key: 'planilhasOperacionais', label: 'Planilhas Operacionais', roles: ['admin', 'cd', 'driver', 'promoter'] },
   { key: 'usuarios', label: 'Usuários', roles: ['admin'] },
   { key: 'configuracoes', label: 'Configurações', roles: ['admin'] },
 ];
@@ -4147,6 +4151,8 @@ const MOBILE_ICON_BY_VIEW = {
   cargaGoiania: '🚛',
   distribuicaoGoiania: '🔁',
   relatorios: '📈',
+  exportacaoMassa: '📤',
+  planilhasOperacionais: '📑',
   usuarios: '👥',
   configuracoes: '⚙️',
 };
@@ -4166,7 +4172,7 @@ const PUBLIC_DASHBOARD_USER = {
 };
 let currentView = 'dashboard';
 let backendMode = 'local';
-const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', pendenciaDate: todayStr(), pendenciaGroup: '', pendenciaResponsible: '', pendenciaType: '', pendenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '', separatorEditorId: '', separatorEditorNetwork: '', separatorEditorSearch: '', folhagensSeparatorId: '', folhagensSeparatorDate: todayStr() };
+const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', pendenciaDate: todayStr(), pendenciaGroup: '', pendenciaResponsible: '', pendenciaType: '', pendenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '', separatorEditorId: '', separatorEditorNetwork: '', separatorEditorSearch: '', folhagensSeparatorId: '', folhagensSeparatorDate: todayStr(), exportMassStartDate: `${todayStr().slice(0, 8)}01`, exportMassEndDate: todayStr(), exportMassNetwork: '', exportMassStoreId: '' };
 let firebaseDb = null;
 let firebaseRootRef = null;
 let unsubscribeFirebase = null;
@@ -5396,6 +5402,7 @@ function canAccessView(viewKey, user = currentUser) {
   if (!item || !user || !item.roles.includes(user.role)) return false;
   if (viewKey === 'cargaGoiania' && user.role === 'driver' && !isGoianiaTrunkUser(user)) return false;
   if (viewKey === 'distribuicaoGoiania' && user.role === 'driver' && !isGoianiaTrunkUser(user)) return false;
+  if (viewKey === 'planilhasOperacionais' && !canUseAnyOperationalSpreadsheet(user)) return false;
   if (user.role !== 'admin' && Array.isArray(user.allowedViews) && user.allowedViews.length && !getEffectiveAllowedViews(user).includes(viewKey)) return false;
   return true;
 }
@@ -6002,6 +6009,9 @@ function ensureStateShape(state) {
   base.reliefDriverAssignments = Array.isArray(base.reliefDriverAssignments) ? base.reliefDriverAssignments : [];
   base.deliveryPlanImports = Array.isArray(base.deliveryPlanImports) ? base.deliveryPlanImports : [];
   base.deliveryPlanAliases = Array.isArray(base.deliveryPlanAliases) ? base.deliveryPlanAliases : [];
+  base.operationalSpreadsheetImports = Array.isArray(base.operationalSpreadsheetImports) ? base.operationalSpreadsheetImports : [];
+  base.operationalSpreadsheetRecords = Array.isArray(base.operationalSpreadsheetRecords) ? base.operationalSpreadsheetRecords : [];
+  base.spreadsheetConflicts = Array.isArray(base.spreadsheetConflicts) ? base.spreadsheetConflicts : [];
   base.separators = Array.isArray(base.separators) ? base.separators : [];
 
   base.movements.outbounds = base.movements.outbounds.map((item) => ({
@@ -6088,6 +6098,38 @@ function ensureStateShape(state) {
     userId: item.userId || '',
     selectedAt: item.selectedAt || item.createdAt || nowIso(),
   }));
+
+
+  base.operationalSpreadsheetImports = base.operationalSpreadsheetImports.map((item) => ({
+    ...item,
+    id: item.id || randomId('opsimp'),
+    importType: item.importType || '',
+    fileName: item.fileName || 'planilha.xlsx',
+    createdAt: item.createdAt || nowIso(),
+    createdBy: item.createdBy || 'Sistema',
+    createdById: item.createdById || '',
+    totalRows: safeInt(item.totalRows),
+    validRows: safeInt(item.validRows),
+    unmatchedCount: safeInt(item.unmatchedCount),
+    unmatchedNames: Array.isArray(item.unmatchedNames) ? item.unmatchedNames.slice(0, 100) : [],
+  }));
+  base.operationalSpreadsheetRecords = base.operationalSpreadsheetRecords.map((item) => ({
+    ...item,
+    id: item.id || randomId('opsrow'),
+    importType: item.importType || '',
+    date: item.date || todayStr(),
+    storeId: item.storeId || '',
+    sent: safeInt(item.sent),
+    received: safeInt(item.received),
+    delivered: safeInt(item.delivered),
+    pickedUp: safeInt(item.pickedUp),
+    sourceFile: item.sourceFile || '',
+    importId: item.importId || '',
+    importedAt: item.importedAt || item.createdAt || nowIso(),
+    importedBy: item.importedBy || item.createdBy || 'Sistema',
+    notes: String(item.notes || ''),
+  })).filter((item) => item.importType && item.date && item.storeId && getStoreById(item.storeId, base));
+  base.spreadsheetConflicts = buildOperationalSpreadsheetConflicts(base);
 
   base.deliveryPlanImports = base.deliveryPlanImports.map((item) => ({
     ...item,
@@ -6259,6 +6301,9 @@ function createSeedState() {
     reliefDriverAssignments: [],
     deliveryPlanImports: [],
     deliveryPlanAliases: [],
+    operationalSpreadsheetImports: [],
+    operationalSpreadsheetRecords: [],
+    spreadsheetConflicts: [],
     separators: [],
     divergences: [],
     audit: [],
@@ -8757,6 +8802,71 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     audit('Estornos e Correções', 'Lançamento estornado', `${getMovementKindLabel(movementType)} ${payload.id} estornado. Motivo: ${reason}.`);
   }
 
+
+  if (type === 'IMPORT_OPERATIONAL_SPREADSHEET') {
+    const importType = String(payload.importType || '').trim();
+    if (!OPERATIONAL_SPREADSHEET_TYPES[importType]) return { ok: false, error: 'Tipo de planilha operacional inválido.' };
+    if (!canUseOperationalSpreadsheetType(importType, actor)) return { ok: false, error: 'Seu usuário não tem permissão para importar esta planilha.' };
+
+    const rows = Array.isArray(payload.records) ? payload.records : [];
+    if (!rows.length) return { ok: false, error: 'A planilha não possui linhas válidas para importar.' };
+    const importId = randomId('opsimp');
+    const importedAt = nowIso();
+    const fileName = String(payload.fileName || 'planilha.xlsx').slice(0, 140);
+    const keys = new Set();
+    let replacedCount = 0;
+
+    rows.forEach((row) => {
+      const store = getStoreById(row.storeId, state);
+      if (!store) return;
+      const date = String(row.date || todayStr());
+      const key = `${importType}|${date}|${store.id}`;
+      keys.add(key);
+      const existingIndex = (state.operationalSpreadsheetRecords || []).findIndex((item) => `${item.importType}|${item.date}|${item.storeId}` === key);
+      const record = {
+        id: randomId('opsrow'),
+        importType,
+        date,
+        storeId: store.id,
+        sent: safeInt(row.sent),
+        received: safeInt(row.received),
+        delivered: safeInt(row.delivered),
+        pickedUp: safeInt(row.pickedUp),
+        notes: String(row.notes || ''),
+        driverName: String(row.driverName || ''),
+        sourceFile: fileName,
+        importId,
+        importedAt,
+        importedBy: actor.name,
+        importedById: actor.id,
+      };
+      if (existingIndex >= 0) {
+        state.operationalSpreadsheetRecords.splice(existingIndex, 1, record);
+        replacedCount += 1;
+      } else {
+        state.operationalSpreadsheetRecords.unshift(record);
+      }
+    });
+
+    state.operationalSpreadsheetRecords = state.operationalSpreadsheetRecords.slice(0, 18000);
+    state.operationalSpreadsheetImports.unshift({
+      id: importId,
+      importType,
+      fileName,
+      createdAt: importedAt,
+      createdBy: actor.name,
+      createdById: actor.id,
+      totalRows: safeInt(payload.totalRows || rows.length),
+      validRows: rows.length,
+      unmatchedCount: safeInt(payload.unmatchedCount),
+      unmatchedNames: Array.isArray(payload.unmatchedNames) ? payload.unmatchedNames.slice(0, 100) : [],
+      replacedCount,
+    });
+    state.operationalSpreadsheetImports = state.operationalSpreadsheetImports.slice(0, 300);
+    state.spreadsheetConflicts = buildOperationalSpreadsheetConflicts(state);
+    audit('Planilhas Operacionais', 'Importação de Excel', `${actor.name} importou ${rows.length} linha(s) em ${getOperationalSpreadsheetTypeLabel(importType)} pelo arquivo ${fileName}. ${replacedCount} registro(s) anterior(es) foram substituídos; o Excel mais recente prevaleceu.`);
+  }
+
   if (type === 'UPDATE_SETTINGS') {
     state.settings.safetyMargin = safeInt(payload.safetyMargin);
     Object.keys(state.settings.manualBaselineByWeekday).forEach((weekday) => {
@@ -9138,6 +9248,8 @@ function getDynamicCounts() {
     appState?.movements?.receipts?.length || 0,
     appState?.movements?.pickups?.length || 0,
     appState?.mandatoryInventories?.length || 0,
+    appState?.spreadsheetConflicts?.length || 0,
+    appState?.operationalSpreadsheetRecords?.length || 0,
   ].join('|');
 
   if (dynamicCountsCache.key === key && dynamicCountsCache.value) {
@@ -9211,6 +9323,8 @@ function renderCurrentView() {
     cargaGoiania: renderCargaGoiania,
     distribuicaoGoiania: renderDistribuicaoGoiania,
     relatorios: renderRelatorios,
+    exportacaoMassa: renderExportacaoMassa,
+    planilhasOperacionais: renderPlanilhasOperacionais,
     usuarios: renderUsuarios,
     configuracoes: renderConfiguracoes,
   };
@@ -9759,9 +9873,13 @@ function getTodayMetrics(state = appState, user = currentUser) {
   const receipts = state.movements.receipts.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
   const pickupsToday = state.movements.pickups.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
   const returnsToday = state.movements.returns.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
-  const sent = outbounds.reduce((acc, item) => acc + sumQty(item.qty), 0);
-  const confirmed = receipts.reduce((acc, item) => acc + sumQty(item.qty), 0);
-  const pickups = pickupsToday.reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
+  const excelToday = getOperationalSpreadsheetRecordsForDate(today, state);
+  const excelSentRows = excelToday.filter((item) => item.importType === 'cd_outbound');
+  const excelReceiptRows = excelToday.filter((item) => item.importType === 'receipt_df' || item.importType === 'receipt_go');
+  const excelDriverRows = excelToday.filter((item) => item.importType === 'driver_ops');
+  const sent = excelSentRows.length ? excelSentRows.reduce((acc, item) => acc + safeInt(item.sent), 0) : outbounds.reduce((acc, item) => acc + sumQty(item.qty), 0);
+  const confirmed = excelReceiptRows.length ? excelReceiptRows.reduce((acc, item) => acc + safeInt(item.received), 0) : receipts.reduce((acc, item) => acc + sumQty(item.qty), 0);
+  const pickups = excelDriverRows.length ? excelDriverRows.reduce((acc, item) => acc + safeInt(item.pickedUp), 0) : pickupsToday.reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
   const returns = returnsToday.reduce((acc, item) => acc + sumQty(item.qty), 0);
   const companyTotals = getCompanyBoxTotals(state);
   const company = user?.role === 'driver' ? 0 : (user?.role === 'promoter' ? companyTotals.total : sumQty(state.cdStock));
@@ -10606,6 +10724,30 @@ function getOperationalPendencies(date = todayStr(), state = appState) {
       });
     });
 
+
+  (state.spreadsheetConflicts || [])
+    .filter((item) => item.status === 'aberta' && (!date || item.date === date))
+    .forEach((item) => {
+      const store = getStoreById(item.storeId, state);
+      const routeId = item.storeId ? getEffectiveRoute(item.storeId, item.date, state) : null;
+      pendencies.push({
+        area: 'Conflito entre planilhas',
+        responsibleRole: 'admin',
+        responsibleUserId: null,
+        responsibleName: item.responsibleName || 'Gestão',
+        ownerKey: 'admin',
+        ownerName: item.responsibleName || 'Gestão',
+        ownerArea: 'Validação por Excel',
+        ownerUserId: null,
+        ownerReason: 'As fontes em Excel não fecharam entre si.',
+        storeId: item.storeId,
+        routeId,
+        date: item.date,
+        description: `${store?.name || '-'}: ${item.description}. O Dashboard mantém cada valor conforme o Excel de origem e abre esta pendência para conferência.`,
+        priority: 'danger',
+      });
+    });
+
   return pendencies;
 }
 
@@ -10999,6 +11141,7 @@ function renderDashboard() {
   return `
     <div class="stack">
       ${renderMandatoryInventoryNotice(todayStr())}
+      ${renderOperationalSpreadsheetDashboardSummary(todayStr())}
       ${showCdForecast ? (metrics.company < forecast.predicted ? `
         <div class="alert-strip critical">
           <div>
@@ -14326,6 +14469,1021 @@ function renderRelatorios() {
   `;
 }
 
+
+
+const OPERATIONAL_SPREADSHEET_TYPES = {
+  cd_outbound: {
+    label: 'CD - Caixas lançadas',
+    shortLabel: 'CD',
+    responsible: 'CD / Produção',
+    region: 'all',
+    quantityFields: ['sent'],
+  },
+  receipt_df: {
+    label: 'MÉRCIA - Recebimentos DF',
+    shortLabel: 'Recebimentos DF',
+    responsible: 'MÉRCIA',
+    region: 'df',
+    quantityFields: ['received'],
+  },
+  receipt_go: {
+    label: 'César - Recebimentos Goiânia',
+    shortLabel: 'Recebimentos GO',
+    responsible: 'César',
+    region: 'goiania',
+    quantityFields: ['received'],
+  },
+  driver_ops: {
+    label: 'Roberto - Entregas e recolhimentos',
+    shortLabel: 'Motoristas',
+    responsible: 'Roberto Cesar',
+    region: 'all',
+    quantityFields: ['delivered', 'pickedUp'],
+  },
+};
+
+function getOperationalSpreadsheetTypeLabel(type) {
+  return OPERATIONAL_SPREADSHEET_TYPES[type]?.label || type || 'Planilha operacional';
+}
+
+function canUseOperationalSpreadsheetType(type, user = currentUser) {
+  if (!user || !OPERATIONAL_SPREADSHEET_TYPES[type]) return false;
+  if (user.role === 'admin') return true;
+  const name = normalizeText(`${user.name || ''} ${user.username || ''}`);
+  if (type === 'cd_outbound') return user.role === 'cd';
+  if (type === 'receipt_df') return user.id === 'user_wxv7tlng' || name.includes('mercia') || name.includes('marcia');
+  if (type === 'receipt_go') return user.id === 'user_i2h4fbit' || name.includes('paulo cesar') || name === 'cesar' || name.includes(' cesar');
+  if (type === 'driver_ops') return user.id === 'user_admin_roberto_cesar' || name.includes('roberto cesar');
+  return false;
+}
+
+function canUseAnyOperationalSpreadsheet(user = currentUser) {
+  if (!user) return false;
+  return Object.keys(OPERATIONAL_SPREADSHEET_TYPES).some((type) => canUseOperationalSpreadsheetType(type, user));
+}
+
+function getOperationalSpreadsheetRecordsForDate(date = todayStr(), state = appState) {
+  return (state.operationalSpreadsheetRecords || []).filter((item) => item.date === date);
+}
+
+function getOperationalSpreadsheetRecord(type, date, storeId, state = appState) {
+  return (state.operationalSpreadsheetRecords || []).find((item) => item.importType === type && item.date === date && item.storeId === storeId) || null;
+}
+
+function buildOperationalSpreadsheetConflicts(state = appState) {
+  const records = Array.isArray(state?.operationalSpreadsheetRecords) ? state.operationalSpreadsheetRecords : [];
+  const keys = new Set(records.map((item) => `${item.date}|${item.storeId}`));
+  const conflicts = [];
+  keys.forEach((key) => {
+    const [date, storeId] = key.split('|');
+    const store = getStoreById(storeId, state);
+    if (!store) return;
+    const cd = records.find((item) => item.importType === 'cd_outbound' && item.date === date && item.storeId === storeId);
+    const driver = records.find((item) => item.importType === 'driver_ops' && item.date === date && item.storeId === storeId);
+    const receiptType = getStoreRegionalKey(storeId, state) === 'goiania' ? 'receipt_go' : 'receipt_df';
+    const receipt = records.find((item) => item.importType === receiptType && item.date === date && item.storeId === storeId);
+
+    if (cd && driver && safeInt(cd.sent) !== safeInt(driver.delivered)) {
+      conflicts.push({
+        id: `sheet_cd_driver_${slugId(date + '_' + storeId)}`,
+        type: 'planilha_cd_motorista',
+        date,
+        storeId,
+        status: 'aberta',
+        expectedTotal: safeInt(cd.sent),
+        actualTotal: safeInt(driver.delivered),
+        difference: safeInt(driver.delivered) - safeInt(cd.sent),
+        responsibleName: 'CD / Roberto',
+        description: `CD informou ${safeInt(cd.sent)} caixa(s), enquanto Roberto informou ${safeInt(driver.delivered)} deixada(s) pelo motorista`,
+      });
+    }
+    if (driver && receipt && safeInt(driver.delivered) !== safeInt(receipt.received)) {
+      conflicts.push({
+        id: `sheet_driver_receipt_${slugId(date + '_' + storeId)}`,
+        type: 'planilha_motorista_loja',
+        date,
+        storeId,
+        status: 'aberta',
+        expectedTotal: safeInt(driver.delivered),
+        actualTotal: safeInt(receipt.received),
+        difference: safeInt(receipt.received) - safeInt(driver.delivered),
+        responsibleName: getStoreRegionalKey(storeId, state) === 'goiania' ? 'Roberto / César' : 'Roberto / MÉRCIA',
+        description: `Motorista deixou ${safeInt(driver.delivered)} caixa(s), enquanto a loja recebeu ${safeInt(receipt.received)}`,
+      });
+    }
+  });
+  return conflicts.sort((a, b) => String(b.date).localeCompare(String(a.date)) || (getStoreById(a.storeId, state)?.name || '').localeCompare(getStoreById(b.storeId, state)?.name || '', 'pt-BR'));
+}
+
+function getOperationalSpreadsheetValidationRows(date = todayStr(), state = appState) {
+  const dayRecords = getOperationalSpreadsheetRecordsForDate(date, state);
+  const storeIds = [...new Set(dayRecords.map((item) => item.storeId).filter(Boolean))];
+  const conflicts = (state.spreadsheetConflicts || []).filter((item) => item.date === date && item.status === 'aberta');
+  return storeIds.map((storeId) => {
+    const store = getStoreById(storeId, state);
+    const cd = getOperationalSpreadsheetRecord('cd_outbound', date, storeId, state);
+    const driver = getOperationalSpreadsheetRecord('driver_ops', date, storeId, state);
+    const receiptType = getStoreRegionalKey(storeId, state) === 'goiania' ? 'receipt_go' : 'receipt_df';
+    const receipt = getOperationalSpreadsheetRecord(receiptType, date, storeId, state);
+    const storeConflicts = conflicts.filter((item) => item.storeId === storeId);
+    const missing = [];
+    if (!cd) missing.push('CD');
+    if (!driver) missing.push('Roberto');
+    if (!receipt) missing.push(receiptType === 'receipt_go' ? 'César' : 'MÉRCIA');
+    return {
+      store,
+      region: getStoreRegionalKey(storeId, state) === 'goiania' ? 'Goiânia' : 'DF',
+      sent: cd ? safeInt(cd.sent) : null,
+      delivered: driver ? safeInt(driver.delivered) : null,
+      received: receipt ? safeInt(receipt.received) : null,
+      pickedUp: driver ? safeInt(driver.pickedUp) : null,
+      conflicts: storeConflicts,
+      missing,
+      status: storeConflicts.length ? 'conflict' : (missing.length ? 'pending' : 'ok'),
+    };
+  }).sort((a, b) => (a.status === 'conflict' ? -1 : a.status === 'pending' ? 0 : 1) - (b.status === 'conflict' ? -1 : b.status === 'pending' ? 0 : 1) || (a.store?.name || '').localeCompare(b.store?.name || '', 'pt-BR'));
+}
+
+function renderOperationalSpreadsheetDashboardSummary(date = todayStr()) {
+  if (publicDashboardMode) return '';
+  const records = getOperationalSpreadsheetRecordsForDate(date);
+  if (!records.length && !canUseAnyOperationalSpreadsheet(currentUser)) return '';
+  const rows = getOperationalSpreadsheetValidationRows(date);
+  const conflicts = rows.reduce((acc, row) => acc + row.conflicts.length, 0);
+  const pending = rows.filter((row) => row.status === 'pending').length;
+  const ok = rows.filter((row) => row.status === 'ok').length;
+  return `
+    <div class="card">
+      <div class="page-header">
+        <div>
+          <h3>Validação por Planilhas</h3>
+          <p class="muted">Fonte operacional oficial: Excel. Em conflito com lançamentos anteriores do sistema, prevalece o registro importado da planilha.</p>
+        </div>
+        ${canAccessView('planilhasOperacionais', currentUser) ? '<button type="button" class="btn btn-secondary" id="btn-open-planilhas-operacionais">Abrir Planilhas Operacionais</button>' : ''}
+      </div>
+      <div class="stats-inline">
+        <div class="stat-pill"><span>Registros Excel hoje</span><strong>${records.length}</strong></div>
+        <div class="stat-pill"><span>Conferidos</span><strong>${ok}</strong></div>
+        <div class="stat-pill"><span>Conflitos</span><strong>${conflicts}</strong></div>
+      </div>
+      ${pending ? `<div class="helper-card compact small" style="margin-top:12px">${pending} loja(s) ainda aguardam uma das planilhas responsáveis.</div>` : ''}
+    </div>
+  `;
+}
+
+function renderPlanilhasOperacionais() {
+  if (!canUseAnyOperationalSpreadsheet(currentUser)) return '<div class="empty">Seu usuário não possui responsabilidade de importação por planilha.</div>';
+  const date = viewFilters.operationalSpreadsheetDate || todayStr();
+  const rows = getOperationalSpreadsheetValidationRows(date);
+  const conflicts = (appState.spreadsheetConflicts || []).filter((item) => item.date === date && item.status === 'aberta');
+  const permittedTypes = Object.keys(OPERATIONAL_SPREADSHEET_TYPES).filter((type) => canUseOperationalSpreadsheetType(type, currentUser));
+  const recentImports = (appState.operationalSpreadsheetImports || []).filter((item) => currentUser.role === 'admin' || permittedTypes.includes(item.importType)).slice(0, 12);
+
+  const cards = permittedTypes.map((type) => {
+    const meta = OPERATIONAL_SPREADSHEET_TYPES[type];
+    const help = type === 'cd_outbound'
+      ? 'Abas separadas por SEPARADOR. Preencha DATA, LOJA e CAIXAS_ENVIADAS.'
+      : type === 'driver_ops'
+        ? 'Abas separadas por ROTA. Preencha DATA, LOJA, CAIXAS_DEIXADAS e CAIXAS_RECOLHIDAS.'
+        : `Abas separadas por REDE. Preencha DATA, LOJA e CAIXAS_RECEBIDAS. Lojas permitidas: ${meta.region === 'goiania' ? 'Regional Goiânia' : 'DF'}.`;
+    return `
+      <div class="card">
+        <div class="section-header">
+          <div><h3>${meta.label}</h3><p>${help}</p></div>
+          <span class="tag info">${meta.responsible}</span>
+        </div>
+        <div class="helper-card compact small">O arquivo mais recente substitui o registro anterior da mesma loja/data nesta fonte. O Excel passa a ser o valor oficial desta etapa.</div>
+        <div class="form-actions" style="margin-top:12px">
+          <button type="button" class="btn btn-secondary btn-download-operational-template" data-type="${type}">Baixar modelo Excel</button>
+        </div>
+        <form class="stack form-operational-spreadsheet-import" data-type="${type}" style="margin-top:12px">
+          <label>Selecionar planilha preenchida
+            <input type="file" name="file" accept=".xlsx,.xls" required />
+          </label>
+          <div class="form-actions"><button type="submit" class="btn btn-primary">Importar e validar</button></div>
+        </form>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="stack">
+      <div class="alert-strip info">
+        <div><strong>Fluxo oficial por Excel</strong><p class="muted">CD informa enviado; MÉRCIA informa recebido no DF; César informa recebido em Goiânia; Roberto informa deixado e recolhido pelos motoristas. O Dashboard apenas cruza e valida as fontes.</p></div>
+        <button type="button" class="btn btn-secondary" id="btn-download-operational-full-template">Baixar modelo completo (abas agrupadas)</button>
+      </div>
+      <div class="grid-2">${cards}</div>
+
+      <div class="card">
+        <div class="page-header">
+          <div><h3>Validação consolidada</h3><p class="muted">As quantidades abaixo vêm exclusivamente das planilhas operacionais importadas.</p></div>
+          <label style="min-width:190px">Data da conferência<input type="date" id="operational-spreadsheet-date" value="${date}" /></label>
+        </div>
+        <div class="stats-inline" style="margin-bottom:12px">
+          <div class="stat-pill"><span>Lojas com dados</span><strong>${rows.length}</strong></div>
+          <div class="stat-pill"><span>Conflitos</span><strong>${conflicts.length}</strong></div>
+          <div class="stat-pill"><span>Conferidos</span><strong>${rows.filter((row) => row.status === 'ok').length}</strong></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Loja</th><th>Região</th><th>CD enviou</th><th>Motorista deixou</th><th>Loja recebeu</th><th>Motorista recolheu</th><th>Status</th></tr></thead>
+            <tbody>
+              ${rows.length ? rows.map((row) => `
+                <tr>
+                  <td><strong>${escapeHtml(row.store?.name || '-')}</strong></td>
+                  <td>${row.region}</td>
+                  <td>${row.sent === null ? '-' : row.sent}</td>
+                  <td>${row.delivered === null ? '-' : row.delivered}</td>
+                  <td>${row.received === null ? '-' : row.received}</td>
+                  <td>${row.pickedUp === null ? '-' : row.pickedUp}</td>
+                  <td>${row.status === 'conflict' ? '<span class="tag danger">Conflito</span>' : row.status === 'pending' ? `<span class="tag warn">Aguardando ${escapeHtml(row.missing.join(' / '))}</span>` : '<span class="tag ok">Conferido</span>'}</td>
+                </tr>
+              `).join('') : '<tr><td colspan="7"><div class="empty">Nenhum dado de planilha importado para esta data.</div></td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-header"><div><h3>Importações recentes</h3><p>Histórico das planilhas que alimentaram a validação.</p></div></div>
+        <div class="table-wrap"><table><thead><tr><th>Data/Hora</th><th>Responsável</th><th>Fonte</th><th>Arquivo</th><th>Linhas</th><th>Substituídas</th><th>Não reconhecidas</th></tr></thead><tbody>
+          ${recentImports.length ? recentImports.map((item) => `<tr><td>${formatDateTimeBR(item.createdAt)}</td><td>${escapeHtml(item.createdBy || '-')}</td><td>${escapeHtml(getOperationalSpreadsheetTypeLabel(item.importType))}</td><td>${escapeHtml(item.fileName || '-')}</td><td>${safeInt(item.validRows)}</td><td>${safeInt(item.replacedCount)}</td><td>${safeInt(item.unmatchedCount)}</td></tr>`).join('') : '<tr><td colspan="7" class="center muted">Nenhuma importação realizada.</td></tr>'}
+        </tbody></table></div>
+      </div>
+    </div>
+  `;
+}
+
+function getSpreadsheetRowValue(row, aliases = []) {
+  const entries = Object.entries(row || {});
+  for (const alias of aliases) {
+    const target = normalizeText(alias);
+    const exact = entries.find(([key]) => normalizeText(key) === target);
+    if (exact) return exact[1];
+  }
+  for (const alias of aliases) {
+    const target = normalizeText(alias);
+    const partial = entries.find(([key]) => normalizeText(key).includes(target));
+    if (partial) return partial[1];
+  }
+  return '';
+}
+
+function parseOperationalSpreadsheetInteger(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.round(value));
+  let text = String(value ?? '').trim();
+  if (!text) return 0;
+  text = text.replace(/\s/g, '');
+  if (text.includes(',') && text.includes('.')) text = text.replace(/\./g, '').replace(',', '.');
+  else if (text.includes(',')) text = text.replace(',', '.');
+  const parsed = Number(text.replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
+}
+
+async function parseOperationalSpreadsheetFile(file, importType) {
+  if (!window.XLSX) throw new Error('Biblioteca de Excel não carregou. Atualize a página e tente novamente.');
+  const meta = OPERATIONAL_SPREADSHEET_TYPES[importType];
+  if (!meta) throw new Error('Tipo de planilha inválido.');
+  const buffer = await file.arrayBuffer();
+  const workbook = window.XLSX.read(buffer, { type: 'array', cellDates: false });
+  if (!workbook.SheetNames?.length) throw new Error('A planilha não possui abas para leitura.');
+
+  // Compatibilidade com o modelo antigo e com os novos modelos divididos por
+  // separador (CD), rede (promotores) e rota (motoristas).
+  const legacySheet = importType === 'cd_outbound'
+    ? 'CD'
+    : importType === 'receipt_df'
+      ? 'RECEBIMENTOS_DF'
+      : importType === 'receipt_go'
+        ? 'RECEBIMENTOS_GOIANIA'
+        : 'MOTORISTAS';
+  const fullPrefix = importType === 'cd_outbound'
+    ? 'cd - '
+    : importType === 'receipt_df'
+      ? 'df - '
+      : importType === 'receipt_go'
+        ? 'go - '
+        : 'mot - ';
+  const individualPrefix = importType === 'cd_outbound'
+    ? 'sep - '
+    : (importType === 'receipt_df' || importType === 'receipt_go')
+      ? 'rede - '
+      : 'rota - ';
+
+  const normalizedNames = workbook.SheetNames.map((name) => ({ name, normalized: normalizeText(name) }));
+  const normalizedFullPrefix = normalizeText(fullPrefix);
+  const normalizedIndividualPrefix = normalizeText(individualPrefix);
+  let sheetNames = normalizedNames.filter((item) => item.normalized.startsWith(normalizedFullPrefix)).map((item) => item.name);
+  if (!sheetNames.length) {
+    sheetNames = normalizedNames.filter((item) => item.normalized.startsWith(normalizedIndividualPrefix)).map((item) => item.name);
+  }
+  if (!sheetNames.length) {
+    const legacy = normalizedNames.find((item) => item.normalized === normalizeText(legacySheet));
+    if (legacy) sheetNames = [legacy.name];
+  }
+  if (!sheetNames.length) {
+    // Mantém compatibilidade com uma planilha própria do usuário com aba de nome livre.
+    sheetNames = workbook.SheetNames.filter((name) => !/^(instru|leia|ajuda)/i.test(normalizeText(name)));
+  }
+  if (!sheetNames.length) throw new Error('Nenhuma aba válida foi encontrada para esta importação.');
+
+  const rowsWithSheet = [];
+  sheetNames.forEach((sheetName) => {
+    const sheetRows = window.XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '', raw: true });
+    sheetRows.forEach((row) => rowsWithSheet.push({ row, sheetName }));
+  });
+  if (!rowsWithSheet.length) throw new Error('As abas selecionadas não possuem linhas preenchidas.');
+
+  const records = [];
+  const unmatchedNames = [];
+  const duplicateKeys = new Set();
+  const seen = new Set();
+  rowsWithSheet.forEach(({ row, sheetName }) => {
+    const rawStore = String(getSpreadsheetRowValue(row, ['LOJA', 'UNIDADE', 'CLIENTE']) || '').trim();
+    const rawDate = getSpreadsheetRowValue(row, ['DATA', 'DATA OPERACIONAL', 'DATA DA ENTREGA']);
+    if (!rawStore) return;
+    const store = findStoreForDeliveryPlanClientWithAlias(rawStore, appState);
+    if (!store) { unmatchedNames.push(`${rawStore} [${sheetName}]`); return; }
+    if (meta.region !== 'all' && getStoreRegionalKey(store.id, appState) !== meta.region) {
+      unmatchedNames.push(`${rawStore} (região incompatível) [${sheetName}]`);
+      return;
+    }
+    const date = parseYmdFromAny(rawDate, todayStr()) || todayStr();
+    const key = `${date}|${store.id}`;
+    if (seen.has(key)) { duplicateKeys.add(key); return; }
+    seen.add(key);
+    const notes = String(getSpreadsheetRowValue(row, ['OBSERVACAO', 'OBSERVAÇÃO', 'MOTIVO', 'JUSTIFICATIVA']) || '').trim();
+    const rec = { date, storeId: store.id, notes, sourceSheet: sheetName };
+    let hasQtyInput = false;
+    if (importType === 'cd_outbound') {
+      const rawQty = getSpreadsheetRowValue(row, ['CAIXAS_ENVIADAS', 'CAIXAS ENVIADAS', 'CAIXAS_LANCADAS', 'CAIXAS LANÇADAS', 'TOTAL']);
+      hasQtyInput = String(rawQty ?? '').trim() !== '';
+      rec.sent = parseOperationalSpreadsheetInteger(rawQty);
+    }
+    if (importType === 'receipt_df' || importType === 'receipt_go') {
+      const rawQty = getSpreadsheetRowValue(row, ['CAIXAS_RECEBIDAS', 'CAIXAS RECEBIDAS', 'RECEBIDAS', 'TOTAL']);
+      hasQtyInput = String(rawQty ?? '').trim() !== '';
+      rec.received = parseOperationalSpreadsheetInteger(rawQty);
+    }
+    if (importType === 'driver_ops') {
+      const rawDelivered = getSpreadsheetRowValue(row, ['CAIXAS_DEIXADAS', 'CAIXAS DEIXADAS', 'DEIXADAS', 'ENTREGUES']);
+      const rawPickedUp = getSpreadsheetRowValue(row, ['CAIXAS_RECOLHIDAS', 'CAIXAS RECOLHIDAS', 'RECOLHIDAS']);
+      hasQtyInput = String(rawDelivered ?? '').trim() !== '' || String(rawPickedUp ?? '').trim() !== '';
+      rec.delivered = parseOperationalSpreadsheetInteger(rawDelivered);
+      rec.pickedUp = parseOperationalSpreadsheetInteger(rawPickedUp);
+      rec.driverName = String(getSpreadsheetRowValue(row, ['MOTORISTA', 'NOME MOTORISTA']) || '').trim();
+    }
+    if (hasQtyInput) records.push(rec);
+  });
+  if (duplicateKeys.size) throw new Error(`A planilha possui loja/data duplicada em ${duplicateKeys.size} registro(s), inclusive entre abas. Deixe apenas uma ocorrência por loja e data.`);
+  if (!records.length) throw new Error('Nenhuma linha válida com quantidade preenchida foi encontrada.');
+  const uniqueUnmatched = [...new Set(unmatchedNames)];
+  return { records, totalRows: rowsWithSheet.length, unmatchedNames: uniqueUnmatched.slice(0, 100), unmatchedCount: uniqueUnmatched.length };
+}
+
+function sanitizeOperationalSheetName(value, fallback = 'ABA') {
+  const cleaned = String(value || fallback)
+    .replace(/[\\/\?\*\[\]:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (cleaned || fallback).slice(0, 31);
+}
+
+function uniqueOperationalSheetName(workbook, desiredName) {
+  const base = sanitizeOperationalSheetName(desiredName);
+  let name = base;
+  let index = 2;
+  const existing = new Set((workbook.SheetNames || []).map((item) => normalizeText(item)));
+  while (existing.has(normalizeText(name))) {
+    const suffix = ` ${index}`;
+    name = `${base.slice(0, Math.max(1, 31 - suffix.length))}${suffix}`;
+    index += 1;
+  }
+  return name;
+}
+
+function getOperationalTemplateGroupLabel(importType, store, date = todayStr()) {
+  if (importType === 'cd_outbound') return getStoreSeparator(store) || 'SEM SEPARADOR';
+  if (importType === 'receipt_df' || importType === 'receipt_go') return inferStoreNetwork(store) || 'SEM REDE';
+  if (importType === 'driver_ops') {
+    const routeId = getEffectiveRoute(store.id, date, appState) || store.defaultRouteId;
+    return getRouteById(routeId)?.name || 'SEM ROTA';
+  }
+  return 'OUTROS';
+}
+
+function getOperationalTemplateSheetPrefix(importType, fullTemplate = false) {
+  if (fullTemplate) {
+    if (importType === 'cd_outbound') return 'CD - ';
+    if (importType === 'receipt_df') return 'DF - ';
+    if (importType === 'receipt_go') return 'GO - ';
+    return 'MOT - ';
+  }
+  if (importType === 'cd_outbound') return 'SEP - ';
+  if (importType === 'receipt_df' || importType === 'receipt_go') return 'REDE - ';
+  return 'ROTA - ';
+}
+
+function buildOperationalTemplateRows(importType, stores, date = todayStr()) {
+  return stores.map((store) => {
+    const base = { DATA: date };
+    if (importType === 'cd_outbound') {
+      return {
+        ...base,
+        SEPARADOR: getStoreSeparator(store) || 'SEM SEPARADOR',
+        REDE: inferStoreNetwork(store),
+        LOJA: formatStoreNameForUser(store.name),
+        CAIXAS_ENVIADAS: '',
+        OBSERVACAO: '',
+      };
+    }
+    if (importType === 'receipt_df' || importType === 'receipt_go') {
+      return {
+        ...base,
+        REDE: inferStoreNetwork(store),
+        LOJA: formatStoreNameForUser(store.name),
+        CAIXAS_RECEBIDAS: '',
+        OBSERVACAO: '',
+      };
+    }
+    const routeId = getEffectiveRoute(store.id, date, appState) || store.defaultRouteId;
+    return {
+      ...base,
+      ROTA: getRouteById(routeId)?.name || 'SEM ROTA',
+      REDE: inferStoreNetwork(store),
+      LOJA: formatStoreNameForUser(store.name),
+      CAIXAS_DEIXADAS: '',
+      CAIXAS_RECOLHIDAS: '',
+      MOTORISTA: getUserById(getEffectiveDriver(routeId, date, store.id, appState))?.name || '',
+      OBSERVACAO: '',
+    };
+  });
+}
+
+function setOperationalTemplateColumnWidths(ws, importType) {
+  if (importType === 'cd_outbound') {
+    ws['!cols'] = [{ wch: 12 }, { wch: 24 }, { wch: 22 }, { wch: 42 }, { wch: 18 }, { wch: 36 }];
+  } else if (importType === 'receipt_df' || importType === 'receipt_go') {
+    ws['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 42 }, { wch: 20 }, { wch: 36 }];
+  } else {
+    ws['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 22 }, { wch: 42 }, { wch: 18 }, { wch: 20 }, { wch: 24 }, { wch: 36 }];
+  }
+}
+
+function appendOperationalGroupedSheets(workbook, importType, { fullTemplate = false } = {}) {
+  const meta = OPERATIONAL_SPREADSHEET_TYPES[importType];
+  if (!meta) throw new Error('Tipo de modelo inválido.');
+  const date = todayStr();
+  let stores = getActiveStores().filter((store) => meta.region === 'all' || getStoreRegionalKey(store.id) === meta.region);
+  stores = stores.sort((a, b) => {
+    const groupA = getOperationalTemplateGroupLabel(importType, a, date);
+    const groupB = getOperationalTemplateGroupLabel(importType, b, date);
+    return groupA.localeCompare(groupB, 'pt-BR')
+      || inferStoreNetwork(a).localeCompare(inferStoreNetwork(b), 'pt-BR')
+      || formatStoreNameForUser(a.name).localeCompare(formatStoreNameForUser(b.name), 'pt-BR');
+  });
+
+  const groups = new Map();
+  stores.forEach((store) => {
+    const label = getOperationalTemplateGroupLabel(importType, store, date);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(store);
+  });
+
+  if (!groups.size) groups.set('SEM CADASTROS', []);
+  const prefix = getOperationalTemplateSheetPrefix(importType, fullTemplate);
+  groups.forEach((groupStores, groupLabel) => {
+    const rows = buildOperationalTemplateRows(importType, groupStores, date);
+    const ws = window.XLSX.utils.json_to_sheet(rows.length ? rows : [{ DATA: date, LOJA: '', OBSERVACAO: '' }]);
+    setOperationalTemplateColumnWidths(ws, importType);
+    const sheetName = uniqueOperationalSheetName(workbook, `${prefix}${groupLabel}`);
+    window.XLSX.utils.book_append_sheet(workbook, ws, sheetName);
+  });
+}
+
+function downloadOperationalSpreadsheetTemplate(importType) {
+  if (!window.XLSX) throw new Error('Biblioteca de Excel não carregou.');
+  if (!OPERATIONAL_SPREADSHEET_TYPES[importType]) throw new Error('Tipo de modelo inválido.');
+  const wb = window.XLSX.utils.book_new();
+  appendOperationalGroupedSheets(wb, importType, { fullTemplate: false });
+  const safeName = importType === 'cd_outbound'
+    ? 'MODELO_CD_POR_SEPARADORES.xlsx'
+    : importType === 'receipt_df'
+      ? 'MODELO_MERCIA_DF_POR_REDES.xlsx'
+      : importType === 'receipt_go'
+        ? 'MODELO_CESAR_GOIANIA_POR_REDES.xlsx'
+        : 'MODELO_ROBERTO_POR_ROTAS.xlsx';
+  window.XLSX.writeFile(wb, safeName);
+}
+
+function downloadOperationalSpreadsheetFullTemplate() {
+  if (!window.XLSX) throw new Error('Biblioteca de Excel não carregou.');
+  const wb = window.XLSX.utils.book_new();
+  appendOperationalGroupedSheets(wb, 'cd_outbound', { fullTemplate: true });
+  appendOperationalGroupedSheets(wb, 'receipt_df', { fullTemplate: true });
+  appendOperationalGroupedSheets(wb, 'receipt_go', { fullTemplate: true });
+  appendOperationalGroupedSheets(wb, 'driver_ops', { fullTemplate: true });
+  window.XLSX.writeFile(wb, 'MODELO_PLANILHAS_OPERACIONAIS_SO_FOLHAS_AGRUPADO.xlsx');
+}
+
+function bindPlanilhasOperacionaisEvents() {
+  document.getElementById('btn-download-operational-full-template')?.addEventListener('click', () => {
+    try { downloadOperationalSpreadsheetFullTemplate(); }
+    catch (error) { console.error(error); showToast(error.message || 'Não foi possível gerar o modelo completo.', 'error'); }
+  });
+
+  document.querySelectorAll('.btn-download-operational-template').forEach((button) => {
+    button.addEventListener('click', () => {
+      try { downloadOperationalSpreadsheetTemplate(button.dataset.type); }
+      catch (error) { console.error(error); showToast(error.message || 'Não foi possível gerar o modelo.', 'error'); }
+    });
+  });
+
+  document.querySelectorAll('.form-operational-spreadsheet-import').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const importType = form.dataset.type;
+      const file = form.file?.files?.[0];
+      if (!file) { showToast('Selecione a planilha preenchida.', 'error'); return; }
+      try {
+        const parsed = await parseOperationalSpreadsheetFile(file, importType);
+        const result = await persistMutation('IMPORT_OPERATIONAL_SPREADSHEET', {
+          importType,
+          fileName: file.name,
+          records: parsed.records,
+          totalRows: parsed.totalRows,
+          unmatchedCount: parsed.unmatchedCount,
+          unmatchedNames: parsed.unmatchedNames,
+        }, `Planilha importada. ${parsed.records.length} registro(s) considerados como fonte oficial.`);
+        if (result.ok) {
+          if (parsed.unmatchedCount) showToast(`Importação concluída, mas ${parsed.unmatchedCount} loja(s) não foram reconhecidas. Revise o histórico da importação.`, 'warn');
+          form.reset();
+          render();
+        }
+      } catch (error) {
+        console.error('Erro ao importar planilha operacional:', error);
+        showToast(error.message || 'Não foi possível importar a planilha.', 'error');
+      }
+    });
+  });
+
+  document.getElementById('operational-spreadsheet-date')?.addEventListener('change', (event) => {
+    viewFilters.operationalSpreadsheetDate = event.target.value || todayStr();
+    scheduleRender();
+  });
+}
+
+function getMassExportScope() {
+  const startDate = viewFilters.exportMassStartDate || `${todayStr().slice(0, 8)}01`;
+  const endDate = viewFilters.exportMassEndDate || todayStr();
+  const network = viewFilters.exportMassNetwork || '';
+  const storeId = viewFilters.exportMassStoreId || '';
+  return { startDate, endDate, network, storeId };
+}
+
+function isDateInsideMassExport(date, startDate, endDate) {
+  const value = String(date || '');
+  return !!value && value >= startDate && value <= endDate;
+}
+
+function massExportStoreMatches(storeId, networkFilter, storeIdFilter, state = appState) {
+  if (!storeId) return !networkFilter && !storeIdFilter;
+  const store = getStoreById(storeId, state);
+  if (!store) return false;
+  if (storeIdFilter && store.id !== storeIdFilter) return false;
+  if (networkFilter && inferStoreNetwork(store) !== networkFilter) return false;
+  return true;
+}
+
+function getMassExportData(state = appState, scope = getMassExportScope()) {
+  const { startDate, endDate, network, storeId } = scope;
+  const inPeriod = (item) => isDateInsideMassExport(item?.date, startDate, endDate);
+  const active = (item) => isActiveMovement(item);
+  const storeScoped = (item) => massExportStoreMatches(item?.storeId, network, storeId, state);
+
+  const outbounds = (state.movements.outbounds || []).filter((item) => active(item) && item.status !== 'historico' && inPeriod(item) && storeScoped(item));
+  const driverDeliveries = (state.movements.driverDeliveries || []).filter((item) => active(item) && inPeriod(item) && storeScoped(item));
+  const receipts = (state.movements.receipts || []).filter((item) => active(item) && inPeriod(item) && storeScoped(item));
+  const pickups = (state.movements.pickups || []).filter((item) => active(item) && inPeriod(item) && storeScoped(item));
+  const inventories = (state.movements.inventories || []).filter((item) => active(item) && inPeriod(item) && (item.location === 'cd' ? (!network && !storeId) : storeScoped(item)));
+  const occupiedBoxes = (state.movements.occupiedBoxes || []).filter((item) => active(item) && inPeriod(item) && storeScoped(item));
+  const releasedBoxes = (state.movements.releasedBoxes || []).filter((item) => active(item) && inPeriod(item) && storeScoped(item));
+  const divergences = (state.divergences || []).filter((item) => inPeriod(item) && massExportStoreMatches(item.storeId, network, storeId, state));
+  const dayClosings = (state.dayClosings || []).filter((item) => inPeriod(item));
+
+  // Retornos são registrados por rota, não por loja. Com filtro de rede/loja,
+  // incluímos somente lotes que tenham ao menos um recolhimento daquele escopo,
+  // mas mantemos o total integral do lote e sinalizamos isso na exportação.
+  const matchingReturnBatchIds = new Set(pickups.map((item) => item.returnBatchId).filter(Boolean));
+  const returns = (state.movements.returns || []).filter((item) => {
+    if (!active(item) || !inPeriod(item)) return false;
+    if (!network && !storeId) return true;
+    return matchingReturnBatchIds.has(item.id);
+  });
+
+  const scopedStores = getActiveStores(state)
+    .filter((store) => (!network || inferStoreNetwork(store) === network) && (!storeId || store.id === storeId))
+    .sort((a, b) => formatStoreNameForUser(a.name).localeCompare(formatStoreNameForUser(b.name), 'pt-BR'));
+
+  return { scope, outbounds, driverDeliveries, receipts, pickups, returns, inventories, occupiedBoxes, releasedBoxes, divergences, dayClosings, scopedStores };
+}
+
+function getMassExportStoreSummaryRows(data, state = appState) {
+  const rows = new Map();
+  data.scopedStores.forEach((store) => {
+    rows.set(store.id, {
+      store,
+      sent: 0,
+      driverDelivered: 0,
+      received: 0,
+      pickedUp: 0,
+      inventoryCount: 0,
+      divergenceCount: 0,
+      openDivergences: 0,
+      occupiedReported: 0,
+      releasedReported: 0,
+    });
+  });
+
+  const ensure = (storeId) => {
+    if (!storeId) return null;
+    if (!rows.has(storeId)) {
+      const store = getStoreById(storeId, state);
+      if (!store) return null;
+      rows.set(storeId, { store, sent: 0, driverDelivered: 0, received: 0, pickedUp: 0, inventoryCount: 0, divergenceCount: 0, openDivergences: 0, occupiedReported: 0, releasedReported: 0 });
+    }
+    return rows.get(storeId);
+  };
+
+  data.outbounds.forEach((item) => { const row = ensure(item.storeId); if (row) row.sent += sumQty(item.qty); });
+  data.driverDeliveries.forEach((item) => { const row = ensure(item.storeId); if (row) row.driverDelivered += safeInt(item.totalDelivered ?? sumQty(item.actualQty)); });
+  data.receipts.forEach((item) => { const row = ensure(item.storeId); if (row) row.received += safeInt(item.totalReceived ?? sumQty(item.qty)); });
+  data.pickups.forEach((item) => { const row = ensure(item.storeId); if (row) row.pickedUp += safeInt(item.totalQty ?? sumQty(item.qty)); });
+  data.inventories.filter((item) => item.location === 'store').forEach((item) => { const row = ensure(item.storeId); if (row) row.inventoryCount += 1; });
+  data.divergences.forEach((item) => { const row = ensure(item.storeId); if (row) { row.divergenceCount += 1; if (item.status === 'aberta') row.openDivergences += 1; } });
+  data.occupiedBoxes.forEach((item) => { const row = ensure(item.storeId); if (row) row.occupiedReported += safeInt(item.totalQty); });
+  data.releasedBoxes.forEach((item) => { const row = ensure(item.storeId); if (row) row.releasedReported += safeInt(item.freeQty); });
+
+  return [...rows.values()].map((row) => {
+    const stock = sumQty(getStoreStock(row.store.id, state));
+    const routeId = getEffectiveRoute(row.store.id, data.scope.endDate, state);
+    const driverId = routeId ? getEffectiveDriver(routeId, data.scope.endDate, row.store.id, state) : null;
+    return {
+      ...row,
+      stock,
+      routeName: getRouteById(routeId, state)?.name || '-',
+      driverName: getUserById(driverId, state)?.name || '-',
+      network: inferStoreNetwork(row.store),
+    };
+  }).sort((a, b) => b.stock - a.stock || b.sent - a.sent || a.store.name.localeCompare(b.store.name, 'pt-BR'));
+}
+
+function getMassExportDailySummaryRows(data) {
+  const dates = [];
+  for (let date = data.scope.startDate; date <= data.scope.endDate; date = addDaysToYmd(date, 1)) dates.push(date);
+  const sumByDate = (items, getter) => dates.reduce((acc, date) => {
+    acc[date] = items.filter((item) => item.date === date).reduce((total, item) => total + getter(item), 0);
+    return acc;
+  }, {});
+  const sent = sumByDate(data.outbounds, (item) => sumQty(item.qty));
+  const driver = sumByDate(data.driverDeliveries, (item) => safeInt(item.totalDelivered ?? sumQty(item.actualQty)));
+  const received = sumByDate(data.receipts, (item) => safeInt(item.totalReceived ?? sumQty(item.qty)));
+  const pickups = sumByDate(data.pickups, (item) => safeInt(item.totalQty ?? sumQty(item.qty)));
+  const returned = sumByDate(data.returns, (item) => safeInt(item.totalQty ?? sumQty(item.qty)));
+  return dates.map((date) => ({
+    date,
+    sent: sent[date],
+    driver: driver[date],
+    received: received[date],
+    pickups: pickups[date],
+    returned: (!data.scope.network && !data.scope.storeId) ? returned[date] : '',
+    inventories: data.inventories.filter((item) => item.date === date).length,
+    divergences: data.divergences.filter((item) => item.date === date).length,
+  }));
+}
+
+function renderExportacaoMassa() {
+  if (currentUser.role !== 'admin') return `<div class="empty">Acesso restrito ao ADM.</div>`;
+  const data = getMassExportData();
+  const summaryRows = getMassExportStoreSummaryRows(data);
+  const networks = [...new Set(getActiveStores().map((store) => inferStoreNetwork(store)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const stores = getActiveStores()
+    .filter((store) => !data.scope.network || inferStoreNetwork(store) === data.scope.network)
+    .sort((a, b) => formatStoreNameForUser(a.name).localeCompare(formatStoreNameForUser(b.name), 'pt-BR'));
+  const totals = {
+    sent: data.outbounds.reduce((acc, item) => acc + sumQty(item.qty), 0),
+    driver: data.driverDeliveries.reduce((acc, item) => acc + safeInt(item.totalDelivered ?? sumQty(item.actualQty)), 0),
+    received: data.receipts.reduce((acc, item) => acc + safeInt(item.totalReceived ?? sumQty(item.qty)), 0),
+    pickups: data.pickups.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0),
+    stock: summaryRows.reduce((acc, row) => acc + row.stock, 0),
+    openDivs: data.divergences.filter((item) => item.status === 'aberta').length,
+  };
+
+  return `
+    <div class="stack">
+      <div class="card">
+        <div class="page-header">
+          <div>
+            <h3>Exportação em massa de caixas</h3>
+            <p class="muted">Gere um único arquivo Excel com resumo geral, resumo por loja e todas as movimentações do período.</p>
+          </div>
+          <span class="tag info">Excel .xlsx</span>
+        </div>
+        <form id="form-exportacao-massa" class="stack">
+          <div class="form-grid">
+            <label>Data inicial
+              <input type="date" name="startDate" value="${data.scope.startDate}" required />
+            </label>
+            <label>Data final
+              <input type="date" name="endDate" value="${data.scope.endDate}" required />
+            </label>
+          </div>
+          <div class="form-grid">
+            <label>Rede
+              <select name="network">
+                <option value="">Todas as redes</option>
+                ${networks.map((network) => `<option value="${escapeHtml(network)}" ${network === data.scope.network ? 'selected' : ''}>${escapeHtml(network)}</option>`).join('')}
+              </select>
+            </label>
+            <label>Loja
+              <select name="storeId">
+                <option value="">Todas as lojas</option>
+                ${stores.map((store) => `<option value="${store.id}" ${store.id === data.scope.storeId ? 'selected' : ''}>${escapeHtml(formatStoreNameForUser(store.name))}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn btn-primary" id="btn-exportar-resumo-caixas">📥 Exportar Excel completo</button>
+            <span class="muted">O arquivo é gerado direto no navegador e não altera nenhum dado do sistema.</span>
+          </div>
+        </form>
+      </div>
+
+      <div class="cards-grid">
+        ${renderMetricCard('Enviado pelo CD', totals.sent, '🚚', 'success', 'Caixas lançadas no período')}
+        ${renderMetricCard('Validado motorista', totals.driver, '✅', 'success', 'Total informado nas entregas')}
+        ${renderMetricCard('Recebido nas lojas', totals.received, '🏬', 'success', 'Confirmações de recebimento')}
+        ${renderMetricCard('Recolhido', totals.pickups, '↩️', 'warning', 'Caixas retiradas das lojas')}
+        ${renderMetricCard('Estoque atual em loja', totals.stock, '📦', 'warning', `${summaryRows.length} loja(s) no filtro`)}
+        ${renderMetricCard('Divergências abertas', totals.openDivs, '⚠️', totals.openDivs ? 'critical' : 'success', 'Dentro do período e filtro selecionado')}
+      </div>
+
+      <div class="card">
+        <div class="section-header">
+          <div>
+            <h3>Prévia do resumo por loja</h3>
+            <p>Esta é a principal aba do Excel. A exportação também inclui as movimentações detalhadas.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Loja</th><th>Rede</th><th>Enviado</th><th>Motorista</th><th>Recebido</th><th>Recolhido</th><th>Estoque atual</th><th>Divergências abertas</th></tr></thead>
+            <tbody>
+              ${summaryRows.length ? summaryRows.slice(0, 30).map((row) => `
+                <tr>
+                  <td>${escapeHtml(formatStoreNameForUser(row.store.name))}</td>
+                  <td>${escapeHtml(row.network)}</td>
+                  <td>${row.sent}</td>
+                  <td>${row.driverDelivered}</td>
+                  <td>${row.received}</td>
+                  <td>${row.pickedUp}</td>
+                  <td><strong>${row.stock}</strong></td>
+                  <td>${row.openDivergences ? `<span class="tag danger">${row.openDivergences}</span>` : statusTag('ok')}</td>
+                </tr>
+              `).join('') : `<tr><td colspan="8" class="center muted">Nenhuma loja encontrada no filtro.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+        ${summaryRows.length > 30 ? `<div class="footer-note">Prévia mostrando 30 de ${summaryRows.length} lojas. O Excel exporta todas.</div>` : ''}
+      </div>
+
+      <div class="helper-card small">
+        <strong>Abas geradas no Excel:</strong> Resumo Geral, Resumo por Loja, Resumo Diário, Estoque Atual, Saídas CD, Entregas Motorista, Recebimentos, Recolhimentos, Retornos CD, Inventários, Divergências, Caixas Ocupadas, Caixas Liberadas e Fechamentos.
+        ${data.scope.network || data.scope.storeId ? '<br><strong>Observação:</strong> retorno ao CD e fechamento são registros globais/por rota. Eles não são rateados proporcionalmente por loja; a planilha sinaliza isso.' : ''}
+      </div>
+    </div>
+  `;
+}
+
+function excelExportValueDate(date) {
+  return date ? formatDateBR(date) : '-';
+}
+
+function excelExportTotal(value) {
+  return safeInt(value?.totalQty ?? value?.totalReceived ?? value?.totalDelivered ?? sumQty(value?.qty || value?.actualQty));
+}
+
+function buildMassExportSheet(workbook, name, rows, headers = null) {
+  let sheet;
+  if (rows.length) {
+    sheet = window.XLSX.utils.json_to_sheet(rows);
+  } else if (headers?.length) {
+    sheet = window.XLSX.utils.aoa_to_sheet([headers]);
+  } else {
+    sheet = window.XLSX.utils.aoa_to_sheet([['Sem registros para o filtro selecionado']]);
+  }
+  const ref = sheet['!ref'];
+  if (ref) sheet['!autofilter'] = { ref };
+  const keys = rows.length ? Object.keys(rows[0]) : (headers || ['Informação']);
+  sheet['!cols'] = keys.map((key) => {
+    let max = String(key).length;
+    rows.slice(0, 500).forEach((row) => { max = Math.max(max, String(row[key] ?? '').length); });
+    return { wch: Math.min(Math.max(max + 2, 10), 42) };
+  });
+  window.XLSX.utils.book_append_sheet(workbook, sheet, name.slice(0, 31));
+}
+
+function exportMassBoxWorkbook() {
+  if (!window.XLSX) throw new Error('Biblioteca de Excel não carregada. Atualize a página e tente novamente.');
+  const data = getMassExportData();
+  if (data.scope.startDate > data.scope.endDate) throw new Error('A data inicial não pode ser maior que a data final.');
+  const storeSummary = getMassExportStoreSummaryRows(data);
+  const dailySummary = getMassExportDailySummaryRows(data);
+  const workbook = window.XLSX.utils.book_new();
+  const hasScopedFilter = !!(data.scope.network || data.scope.storeId);
+
+  const totalSent = data.outbounds.reduce((acc, item) => acc + sumQty(item.qty), 0);
+  const totalDriver = data.driverDeliveries.reduce((acc, item) => acc + safeInt(item.totalDelivered ?? sumQty(item.actualQty)), 0);
+  const totalReceived = data.receipts.reduce((acc, item) => acc + safeInt(item.totalReceived ?? sumQty(item.qty)), 0);
+  const totalPicked = data.pickups.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+  const totalReturned = data.returns.reduce((acc, item) => acc + safeInt(item.totalQty ?? sumQty(item.qty)), 0);
+  const currentStoreStock = storeSummary.reduce((acc, row) => acc + row.stock, 0);
+
+  buildMassExportSheet(workbook, 'Resumo Geral', [
+    { Indicador: 'Período inicial', Valor: excelExportValueDate(data.scope.startDate) },
+    { Indicador: 'Período final', Valor: excelExportValueDate(data.scope.endDate) },
+    { Indicador: 'Rede', Valor: data.scope.network || 'Todas' },
+    { Indicador: 'Loja', Valor: data.scope.storeId ? formatStoreNameForUser(getStoreById(data.scope.storeId)?.name || '-') : 'Todas' },
+    { Indicador: 'Lojas no filtro', Valor: storeSummary.length },
+    { Indicador: 'Caixas enviadas pelo CD', Valor: totalSent },
+    { Indicador: 'Caixas validadas pelo motorista', Valor: totalDriver },
+    { Indicador: 'Caixas recebidas nas lojas', Valor: totalReceived },
+    { Indicador: 'Caixas recolhidas', Valor: totalPicked },
+    { Indicador: hasScopedFilter ? 'Retornos ao CD (lotes relacionados; não rateados)' : 'Retornos ao CD', Valor: totalReturned },
+    { Indicador: 'Estoque atual nas lojas do filtro', Valor: currentStoreStock },
+    { Indicador: 'Divergências no período', Valor: data.divergences.length },
+    { Indicador: 'Divergências abertas no período', Valor: data.divergences.filter((item) => item.status === 'aberta').length },
+    { Indicador: 'Inventários no período', Valor: data.inventories.length },
+  ]);
+
+  buildMassExportSheet(workbook, 'Resumo por Loja', storeSummary.map((row) => ({
+    Rede: row.network,
+    Loja: formatStoreNameForUser(row.store.name),
+    Rota: row.routeName,
+    Motorista: row.driverName,
+    'Enviado CD': row.sent,
+    'Validado motorista': row.driverDelivered,
+    'Recebido loja': row.received,
+    Recolhido: row.pickedUp,
+    'Estoque atual': row.stock,
+    Inventários: row.inventoryCount,
+    'Divergências período': row.divergenceCount,
+    'Divergências abertas': row.openDivergences,
+    'Caixas ocupadas informadas': row.occupiedReported,
+    'Caixas liberadas informadas': row.releasedReported,
+  })));
+
+  buildMassExportSheet(workbook, 'Resumo Diário', dailySummary.map((row) => ({
+    Data: excelExportValueDate(row.date),
+    'Enviado CD': row.sent,
+    'Validado motorista': row.driver,
+    'Recebido loja': row.received,
+    Recolhido: row.pickups,
+    'Retornado CD': row.returned,
+    Inventários: row.inventories,
+    Divergências: row.divergences,
+  })));
+
+  buildMassExportSheet(workbook, 'Estoque Atual', storeSummary.map((row) => ({
+    Rede: row.network,
+    Loja: formatStoreNameForUser(row.store.name),
+    Rota: row.routeName,
+    Motorista: row.driverName,
+    'Estoque atual': row.stock,
+    'Limite estoque alto': safeInt(row.store.highStockLimit),
+    Status: row.stock > safeInt(row.store.highStockLimit) ? 'ACIMA DO LIMITE' : 'OK',
+  })));
+
+  buildMassExportSheet(workbook, 'Saídas CD', data.outbounds.slice().sort((a, b) => a.date.localeCompare(b.date) || String(a.createdAt || '').localeCompare(String(b.createdAt || ''))).map((item) => {
+    const store = getStoreById(item.storeId);
+    return {
+      Data: excelExportValueDate(item.date),
+      Hora: item.createdAt ? new Date(item.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '-',
+      Rede: inferStoreNetwork(store || {}),
+      Loja: formatStoreNameForUser(store?.name || '-'),
+      Rota: getRouteById(item.routeId)?.name || '-',
+      Motorista: getUserById(item.driverId)?.name || '-',
+      Folhagens: safeInt(item.qty?.folhagens),
+      Bandejas: safeInt(item.qty?.bandejas),
+      Total: sumQty(item.qty),
+      'Usuário CD': getUserById(item.createdById)?.name || item.createdBy || '-',
+      Status: item.status || '-',
+    };
+  }));
+
+  buildMassExportSheet(workbook, 'Entregas Motorista', data.driverDeliveries.slice().sort((a, b) => a.date.localeCompare(b.date)).map((item) => {
+    const store = getStoreById(item.storeId);
+    const expected = item.expectedTotal ?? sumQty(item.expectedQty);
+    const actual = safeInt(item.totalDelivered ?? sumQty(item.actualQty));
+    return {
+      Data: excelExportValueDate(item.date), Rede: inferStoreNetwork(store || {}), Loja: formatStoreNameForUser(store?.name || '-'),
+      Rota: getRouteById(item.routeId)?.name || '-', Motorista: getUserById(item.driverId)?.name || '-',
+      Esperado: safeInt(expected), Entregue: actual, Diferença: actual - safeInt(expected), Divergência: item.hasDivergence ? 'SIM' : 'NÃO',
+      Observação: item.notes || '', 'Registrado por': item.createdBy || '-',
+    };
+  }));
+
+  buildMassExportSheet(workbook, 'Recebimentos', data.receipts.slice().sort((a, b) => a.date.localeCompare(b.date)).map((item) => {
+    const store = getStoreById(item.storeId);
+    const outbound = (appState.movements.outbounds || []).find((out) => out.id === item.outboundId);
+    const expected = item.expectedTotal ?? sumQty(item.expectedQty || outbound?.qty);
+    const actual = safeInt(item.totalReceived ?? sumQty(item.qty));
+    return {
+      Data: excelExportValueDate(item.date), Rede: inferStoreNetwork(store || {}), Loja: formatStoreNameForUser(store?.name || '-'),
+      Rota: getRouteById(outbound?.routeId)?.name || '-', Esperado: safeInt(expected), Recebido: actual, Diferença: actual - safeInt(expected),
+      Divergência: item.hasDivergence ? 'SIM' : 'NÃO', 'Registrado por': item.createdBy || '-', Origem: item.source || 'promotor',
+    };
+  }));
+
+  buildMassExportSheet(workbook, 'Recolhimentos', data.pickups.slice().sort((a, b) => a.date.localeCompare(b.date)).map((item) => {
+    const store = getStoreById(item.storeId);
+    return {
+      Data: excelExportValueDate(item.date), Rede: inferStoreNetwork(store || {}), Loja: formatStoreNameForUser(store?.name || '-'),
+      Rota: getRouteById(item.routeId)?.name || '-', Motorista: getUserById(item.driverId)?.name || '-',
+      Recolhido: safeInt(item.totalQty ?? sumQty(item.qty)), 'Saldo disponível antes': safeInt(item.availableAtPickup),
+      'Acima do saldo': item.aboveAvailable ? 'SIM' : 'NÃO', Justificativa: item.justification || '',
+      'Retorno CD vinculado': item.returnBatchId ? 'SIM' : 'NÃO', 'Registrado por': item.createdBy || '-',
+    };
+  }));
+
+  buildMassExportSheet(workbook, 'Retornos CD', data.returns.slice().sort((a, b) => a.date.localeCompare(b.date)).map((item) => {
+    const expected = safeInt(item.expectedTotal ?? sumQty(item.expectedQty));
+    const actual = safeInt(item.totalQty ?? sumQty(item.qty));
+    return {
+      Data: excelExportValueDate(item.date), Rota: getRouteById(item.routeId)?.name || '-', Motorista: getUserById(item.driverId)?.name || '-',
+      Esperado: expected, Retornado: actual, Diferença: actual - expected, 'Qtd. recolhimentos': safeInt(item.pickupsCount),
+      'Retornos frete Goiânia': safeInt(item.freightReturnsCount), 'Ponto de apoio': safeInt(item.supportDropTotal),
+      Justificativa: item.justification || '', Observação: hasScopedFilter ? 'Total integral do lote/rota; não rateado por loja ou rede.' : '',
+      'Registrado por': item.createdBy || '-',
+    };
+  }));
+
+  buildMassExportSheet(workbook, 'Inventários', data.inventories.slice().sort((a, b) => a.date.localeCompare(b.date)).map((item) => {
+    const store = item.storeId ? getStoreById(item.storeId) : null;
+    const previous = sumQty(item.previousQty);
+    const counted = sumQty(item.countedQty);
+    return {
+      Data: excelExportValueDate(item.date), Local: item.location === 'cd' ? 'CD' : 'LOJA', Rede: store ? inferStoreNetwork(store) : '-',
+      Loja: store ? formatStoreNameForUser(store.name) : 'CD', Anterior: previous, Contado: counted, Diferença: counted - previous,
+      Divergência: item.hasDivergence ? 'SIM' : 'NÃO', Observação: item.notes || '', 'Registrado por': item.createdBy || '-',
+    };
+  }));
+
+  buildMassExportSheet(workbook, 'Divergências', data.divergences.slice().sort((a, b) => a.date.localeCompare(b.date)).map((item) => {
+    const store = item.storeId ? getStoreById(item.storeId) : null;
+    const expected = safeInt(item.expectedTotal ?? sumQty(item.expectedQty));
+    const actual = safeInt(item.actualTotal ?? sumQty(item.actualQty));
+    const owner = getDivergenceOwnerInfo(item);
+    return {
+      Data: excelExportValueDate(item.date), Tipo: getDivergenceTitle(item), Rede: store ? inferStoreNetwork(store) : '-',
+      Loja: store ? formatStoreNameForUser(store.name) : '-', Rota: getRouteById(item.routeId)?.name || '-', Motorista: getUserById(item.driverId)?.name || '-',
+      Esperado: expected, Realizado: actual, Diferença: actual - expected, Status: item.status || '-', Responsável: owner.ownerName || '-', Área: owner.ownerArea || '-',
+      Justificativa: item.justification || item.originJustification || '', 'Explicação responsável': item.responsibleExplanation || '',
+    };
+  }));
+
+  buildMassExportSheet(workbook, 'Caixas Ocupadas', data.occupiedBoxes.slice().sort((a, b) => a.date.localeCompare(b.date)).map((item) => {
+    const store = getStoreById(item.storeId);
+    return {
+      Data: excelExportValueDate(item.date), Rede: inferStoreNetwork(store || {}), Loja: formatStoreNameForUser(store?.name || '-'),
+      Rota: getRouteById(item.routeId)?.name || '-', Motorista: getUserById(item.driverId)?.name || '-', Quantidade: safeInt(item.totalQty),
+      'Uso informado': item.usedFor || '', Observação: item.notes || '', Status: item.status || '-', 'Registrado por': item.createdBy || '-',
+    };
+  }));
+
+  buildMassExportSheet(workbook, 'Caixas Liberadas', data.releasedBoxes.slice().sort((a, b) => a.date.localeCompare(b.date)).map((item) => {
+    const store = getStoreById(item.storeId);
+    return {
+      Data: excelExportValueDate(item.date), Rede: inferStoreNetwork(store || {}), Loja: formatStoreNameForUser(store?.name || '-'),
+      Rota: getRouteById(item.routeId)?.name || '-', Motorista: getUserById(item.driverId)?.name || '-',
+      'Total em loja': safeInt(item.totalInStore), Liberadas: safeInt(item.freeQty), Ocupadas: safeInt(item.occupiedQty),
+      Observação: item.notes || '', 'Registrado por': item.createdBy || '-',
+    };
+  }));
+
+  buildMassExportSheet(workbook, 'Fechamentos', data.dayClosings.slice().sort((a, b) => a.date.localeCompare(b.date)).map((item) => ({
+    Data: excelExportValueDate(item.date), Enviado: safeInt(item.sent), 'Validado motorista': safeInt(item.driverValidated), Recebido: safeInt(item.received),
+    Recolhido: safeInt(item.pickedUp), Retornado: safeInt(item.returned), 'Divergências abertas': safeInt(item.openDivergences), Pendências: safeInt(item.pendingCount),
+    Observação: hasScopedFilter ? 'Fechamento global do dia; não filtrado por rede/loja.' : (item.notes || ''), 'Fechado por': item.closedBy || '-', 'Fechado em': formatDateTimeBR(item.closedAt),
+  })));
+
+  const safePart = (value) => normalizeText(value || '').replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '').slice(0, 35);
+  const scopePart = data.scope.storeId ? safePart(getStoreById(data.scope.storeId)?.name) : (data.scope.network ? safePart(data.scope.network) : 'todas_lojas');
+  const fileName = `Resumo_Caixas_${data.scope.startDate}_a_${data.scope.endDate}_${scopePart}.xlsx`;
+  window.XLSX.writeFile(workbook, fileName, { compression: true });
+}
+
+
 function renderUserPermissionControls(user) {
   if (!user) return '-';
   if (user.role === 'admin') return '<small class="muted">ADM sempre tem acesso total.</small>';
@@ -14612,6 +15770,7 @@ function renderConfiguracoes() {
 }
 
 function bindViewEvents() {
+  document.getElementById('btn-open-planilhas-operacionais')?.addEventListener('click', () => navigateToView('planilhasOperacionais'));
   document.querySelectorAll('.btn-go-inventory').forEach((button) => {
     button.addEventListener('click', () => navigateToView('inventario'));
   });
@@ -14632,6 +15791,8 @@ function bindViewEvents() {
   if (currentView === 'lojas') bindLojasEvents();
   if (currentView === 'cargaGoiania') bindCargaGoianiaEvents();
   if (currentView === 'distribuicaoGoiania') bindDistribuicaoGoianiaEvents();
+  if (currentView === 'exportacaoMassa') bindExportacaoMassaEvents();
+  if (currentView === 'planilhasOperacionais') bindPlanilhasOperacionaisEvents();
   if (currentView === 'configuracoes') bindConfigEvents();
   if (currentView === 'inventario') bindInventarioEvents();
   if (currentView === 'divergencias') bindDivergenciasEvents();
@@ -14836,6 +15997,50 @@ function bindResumoEnviosEvents() {
     viewFilters.resumoEnviosNetwork = form.network?.value || '';
     viewFilters.resumoEnviosCdUserId = form.cdUserId?.value || '';
     scheduleRender();
+  });
+}
+
+
+
+function bindExportacaoMassaEvents() {
+  const form = document.getElementById('form-exportacao-massa');
+  if (!form) return;
+
+  const updateFilters = () => {
+    viewFilters.exportMassStartDate = form.startDate?.value || `${todayStr().slice(0, 8)}01`;
+    viewFilters.exportMassEndDate = form.endDate?.value || todayStr();
+    viewFilters.exportMassNetwork = form.network?.value || '';
+    const selectedStoreId = form.storeId?.value || '';
+    const store = selectedStoreId ? getStoreById(selectedStoreId) : null;
+    if (store && viewFilters.exportMassNetwork && inferStoreNetwork(store) !== viewFilters.exportMassNetwork) {
+      viewFilters.exportMassStoreId = '';
+    } else {
+      viewFilters.exportMassStoreId = selectedStoreId;
+    }
+  };
+
+  form.startDate?.addEventListener('change', () => { updateFilters(); scheduleRender(); });
+  form.endDate?.addEventListener('change', () => { updateFilters(); scheduleRender(); });
+  form.network?.addEventListener('change', () => {
+    viewFilters.exportMassNetwork = form.network?.value || '';
+    viewFilters.exportMassStoreId = '';
+    scheduleRender();
+  });
+  form.storeId?.addEventListener('change', () => { updateFilters(); scheduleRender(); });
+
+  document.getElementById('btn-exportar-resumo-caixas')?.addEventListener('click', () => {
+    updateFilters();
+    if (viewFilters.exportMassStartDate > viewFilters.exportMassEndDate) {
+      showToast('A data inicial não pode ser maior que a data final.', 'error');
+      return;
+    }
+    try {
+      exportMassBoxWorkbook();
+      showToast('Planilha de resumos gerada com sucesso.');
+    } catch (error) {
+      console.error('Erro ao exportar resumos de caixas:', error);
+      showToast(error.message || 'Não foi possível gerar a planilha.', 'error');
+    }
   });
 }
 
