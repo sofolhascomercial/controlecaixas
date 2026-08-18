@@ -5443,8 +5443,21 @@ function isBretasStore(store) {
   return normalizeText(store?.network || store?.rede || store?.name).includes('bretas');
 }
 
+// Regra operacional aprovada para validação por promotores/planilhas:
+// somente Dia a Dia, Comper/Fort e Costa exigem a etapa de recebimento do promotor.
+// Todas as demais redes são validadas somente pelo motorista.
+function isPromoterValidationNetwork(store) {
+  if (!store) return false;
+  const network = normalizeText(inferStoreNetwork(store) || store.network || store.rede || store.name || '');
+  return network.includes('dia a dia')
+    || network.includes('comper')
+    || network.includes('fort')
+    || network.includes('costa');
+}
+
 function storeHasFixedPromoter(store) {
   if (!store || store.supportPoint) return false;
+  if (!isPromoterValidationNetwork(store)) return false;
   if (typeof store.hasFixedPromoter === 'boolean') return store.hasFixedPromoter;
   if (store.noPromoter === true) return false;
   if (isBretasStore(store)) return false;
@@ -5453,6 +5466,9 @@ function storeHasFixedPromoter(store) {
 
 function getStoreValidationMode(store) {
   if (!store || store.supportPoint) return 'driver_only';
+  // Mesmo que exista configuração antiga gravada no Firebase, redes fora da
+  // regra acima nunca ficam pendentes de promotor.
+  if (!isPromoterValidationNetwork(store)) return 'driver_only';
   if (['driver_promoter', 'driver_only', 'promoter_only'].includes(store.validationMode)) return store.validationMode;
   return storeHasFixedPromoter(store) ? 'driver_promoter' : 'driver_only';
 }
@@ -8819,6 +8835,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     rows.forEach((row) => {
       const store = getStoreById(row.storeId, state);
       if (!store) return;
+      if ((importType === 'receipt_df' || importType === 'receipt_go') && !isPromoterValidationNetwork(store)) return;
       const date = String(row.date || todayStr());
       const key = `${importType}|${date}|${store.id}`;
       keys.add(key);
@@ -9875,10 +9892,14 @@ function getTodayMetrics(state = appState, user = currentUser) {
   const returnsToday = state.movements.returns.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
   const excelToday = getOperationalSpreadsheetRecordsForDate(today, state);
   const excelSentRows = excelToday.filter((item) => item.importType === 'cd_outbound');
-  const excelReceiptRows = excelToday.filter((item) => item.importType === 'receipt_df' || item.importType === 'receipt_go');
+  const excelReceiptRows = excelToday.filter((item) => (item.importType === 'receipt_df' || item.importType === 'receipt_go') && isPromoterValidationNetwork(getStoreById(item.storeId, state)));
   const excelDriverRows = excelToday.filter((item) => item.importType === 'driver_ops');
+  const excelDriverOnlyRows = excelDriverRows.filter((item) => !isPromoterValidationNetwork(getStoreById(item.storeId, state)));
   const sent = excelSentRows.length ? excelSentRows.reduce((acc, item) => acc + safeInt(item.sent), 0) : outbounds.reduce((acc, item) => acc + sumQty(item.qty), 0);
-  const confirmed = excelReceiptRows.length ? excelReceiptRows.reduce((acc, item) => acc + safeInt(item.received), 0) : receipts.reduce((acc, item) => acc + sumQty(item.qty), 0);
+  const hasExcelConfirmationSource = excelReceiptRows.length > 0 || excelDriverOnlyRows.length > 0;
+  const confirmed = hasExcelConfirmationSource
+    ? excelReceiptRows.reduce((acc, item) => acc + safeInt(item.received), 0) + excelDriverOnlyRows.reduce((acc, item) => acc + safeInt(item.delivered), 0)
+    : receipts.reduce((acc, item) => acc + sumQty(item.qty), 0);
   const pickups = excelDriverRows.length ? excelDriverRows.reduce((acc, item) => acc + safeInt(item.pickedUp), 0) : pickupsToday.reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
   const returns = returnsToday.reduce((acc, item) => acc + sumQty(item.qty), 0);
   const companyTotals = getCompanyBoxTotals(state);
@@ -14522,8 +14543,15 @@ function canUseAnyOperationalSpreadsheet(user = currentUser) {
   return Object.keys(OPERATIONAL_SPREADSHEET_TYPES).some((type) => canUseOperationalSpreadsheetType(type, user));
 }
 
+function isOperationalSpreadsheetRecordApplicable(item, state = appState) {
+  if (!item) return false;
+  if (item.importType !== 'receipt_df' && item.importType !== 'receipt_go') return true;
+  const store = getStoreById(item.storeId, state);
+  return !!store && isPromoterValidationNetwork(store);
+}
+
 function getOperationalSpreadsheetRecordsForDate(date = todayStr(), state = appState) {
-  return (state.operationalSpreadsheetRecords || []).filter((item) => item.date === date);
+  return (state.operationalSpreadsheetRecords || []).filter((item) => item.date === date && isOperationalSpreadsheetRecordApplicable(item, state));
 }
 
 function getOperationalSpreadsheetRecord(type, date, storeId, state = appState) {
@@ -14531,7 +14559,9 @@ function getOperationalSpreadsheetRecord(type, date, storeId, state = appState) 
 }
 
 function buildOperationalSpreadsheetConflicts(state = appState) {
-  const records = Array.isArray(state?.operationalSpreadsheetRecords) ? state.operationalSpreadsheetRecords : [];
+  const records = Array.isArray(state?.operationalSpreadsheetRecords)
+    ? state.operationalSpreadsheetRecords.filter((item) => isOperationalSpreadsheetRecordApplicable(item, state))
+    : [];
   const keys = new Set(records.map((item) => `${item.date}|${item.storeId}`));
   const conflicts = [];
   keys.forEach((key) => {
@@ -14540,8 +14570,9 @@ function buildOperationalSpreadsheetConflicts(state = appState) {
     if (!store) return;
     const cd = records.find((item) => item.importType === 'cd_outbound' && item.date === date && item.storeId === storeId);
     const driver = records.find((item) => item.importType === 'driver_ops' && item.date === date && item.storeId === storeId);
-    const receiptType = getStoreRegionalKey(storeId, state) === 'goiania' ? 'receipt_go' : 'receipt_df';
-    const receipt = records.find((item) => item.importType === receiptType && item.date === date && item.storeId === storeId);
+    const requiresPromoter = isPromoterValidationNetwork(store);
+    const receiptType = requiresPromoter ? (getStoreRegionalKey(storeId, state) === 'goiania' ? 'receipt_go' : 'receipt_df') : null;
+    const receipt = receiptType ? records.find((item) => item.importType === receiptType && item.date === date && item.storeId === storeId) : null;
 
     if (cd && driver && safeInt(cd.sent) !== safeInt(driver.delivered)) {
       conflicts.push({
@@ -14557,7 +14588,7 @@ function buildOperationalSpreadsheetConflicts(state = appState) {
         description: `CD informou ${safeInt(cd.sent)} caixa(s), enquanto Roberto informou ${safeInt(driver.delivered)} deixada(s) pelo motorista`,
       });
     }
-    if (driver && receipt && safeInt(driver.delivered) !== safeInt(receipt.received)) {
+    if (requiresPromoter && driver && receipt && safeInt(driver.delivered) !== safeInt(receipt.received)) {
       conflicts.push({
         id: `sheet_driver_receipt_${slugId(date + '_' + storeId)}`,
         type: 'planilha_motorista_loja',
@@ -14583,13 +14614,14 @@ function getOperationalSpreadsheetValidationRows(date = todayStr(), state = appS
     const store = getStoreById(storeId, state);
     const cd = getOperationalSpreadsheetRecord('cd_outbound', date, storeId, state);
     const driver = getOperationalSpreadsheetRecord('driver_ops', date, storeId, state);
-    const receiptType = getStoreRegionalKey(storeId, state) === 'goiania' ? 'receipt_go' : 'receipt_df';
-    const receipt = getOperationalSpreadsheetRecord(receiptType, date, storeId, state);
+    const requiresPromoter = isPromoterValidationNetwork(store);
+    const receiptType = requiresPromoter ? (getStoreRegionalKey(storeId, state) === 'goiania' ? 'receipt_go' : 'receipt_df') : null;
+    const receipt = receiptType ? getOperationalSpreadsheetRecord(receiptType, date, storeId, state) : null;
     const storeConflicts = conflicts.filter((item) => item.storeId === storeId);
     const missing = [];
     if (!cd) missing.push('CD');
     if (!driver) missing.push('Roberto');
-    if (!receipt) missing.push(receiptType === 'receipt_go' ? 'César' : 'MÉRCIA');
+    if (requiresPromoter && !receipt) missing.push(receiptType === 'receipt_go' ? 'César' : 'MÉRCIA');
     return {
       store,
       region: getStoreRegionalKey(storeId, state) === 'goiania' ? 'Goiânia' : 'DF',
@@ -14597,6 +14629,7 @@ function getOperationalSpreadsheetValidationRows(date = todayStr(), state = appS
       delivered: driver ? safeInt(driver.delivered) : null,
       received: receipt ? safeInt(receipt.received) : null,
       pickedUp: driver ? safeInt(driver.pickedUp) : null,
+      requiresPromoter,
       conflicts: storeConflicts,
       missing,
       status: storeConflicts.length ? 'conflict' : (missing.length ? 'pending' : 'ok'),
@@ -14645,7 +14678,7 @@ function renderPlanilhasOperacionais() {
       ? 'Abas separadas por SEPARADOR. Preencha DATA, LOJA e CAIXAS_ENVIADAS.'
       : type === 'driver_ops'
         ? 'Abas separadas por ROTA. Preencha DATA, LOJA, CAIXAS_DEIXADAS e CAIXAS_RECOLHIDAS.'
-        : `Abas separadas por REDE. Preencha DATA, LOJA e CAIXAS_RECEBIDAS. Lojas permitidas: ${meta.region === 'goiania' ? 'Regional Goiânia' : 'DF'}.`;
+        : `Abas separadas por REDE. Preencha DATA, LOJA e CAIXAS_RECEBIDAS. Somente redes com validação de promotor: Dia a Dia, Comper/Fort e Costa (${meta.region === 'goiania' ? 'Regional Goiânia' : 'DF'}).`;
     return `
       <div class="card">
         <div class="section-header">
@@ -14694,7 +14727,7 @@ function renderPlanilhasOperacionais() {
                   <td>${row.region}</td>
                   <td>${row.sent === null ? '-' : row.sent}</td>
                   <td>${row.delivered === null ? '-' : row.delivered}</td>
-                  <td>${row.received === null ? '-' : row.received}</td>
+                  <td>${row.requiresPromoter ? (row.received === null ? '-' : row.received) : '<span class="tag info">Somente motorista</span>'}</td>
                   <td>${row.pickedUp === null ? '-' : row.pickedUp}</td>
                   <td>${row.status === 'conflict' ? '<span class="tag danger">Conflito</span>' : row.status === 'pending' ? `<span class="tag warn">Aguardando ${escapeHtml(row.missing.join(' / '))}</span>` : '<span class="tag ok">Conferido</span>'}</td>
                 </tr>
@@ -14806,6 +14839,10 @@ async function parseOperationalSpreadsheetFile(file, importType) {
     if (!store) { unmatchedNames.push(`${rawStore} [${sheetName}]`); return; }
     if (meta.region !== 'all' && getStoreRegionalKey(store.id, appState) !== meta.region) {
       unmatchedNames.push(`${rawStore} (região incompatível) [${sheetName}]`);
+      return;
+    }
+    if ((importType === 'receipt_df' || importType === 'receipt_go') && !isPromoterValidationNetwork(store)) {
+      unmatchedNames.push(`${rawStore} (rede sem validação de promotor; validar somente pelo motorista) [${sheetName}]`);
       return;
     }
     const date = parseYmdFromAny(rawDate, todayStr()) || todayStr();
@@ -14934,7 +14971,11 @@ function appendOperationalGroupedSheets(workbook, importType, { fullTemplate = f
   const meta = OPERATIONAL_SPREADSHEET_TYPES[importType];
   if (!meta) throw new Error('Tipo de modelo inválido.');
   const date = todayStr();
-  let stores = getActiveStores().filter((store) => meta.region === 'all' || getStoreRegionalKey(store.id) === meta.region);
+  let stores = getActiveStores().filter((store) => {
+    if (meta.region !== 'all' && getStoreRegionalKey(store.id) !== meta.region) return false;
+    if ((importType === 'receipt_df' || importType === 'receipt_go') && !isPromoterValidationNetwork(store)) return false;
+    return true;
+  });
   stores = stores.sort((a, b) => {
     const groupA = getOperationalTemplateGroupLabel(importType, a, date);
     const groupB = getOperationalTemplateGroupLabel(importType, b, date);
