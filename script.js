@@ -4172,7 +4172,7 @@ const PUBLIC_DASHBOARD_USER = {
 };
 let currentView = 'dashboard';
 let backendMode = 'local';
-const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', pendenciaDate: todayStr(), pendenciaGroup: '', pendenciaResponsible: '', pendenciaType: '', pendenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '', separatorEditorId: '', separatorEditorNetwork: '', separatorEditorSearch: '', folhagensSeparatorId: '', folhagensSeparatorDate: todayStr(), exportMassStartDate: `${todayStr().slice(0, 8)}01`, exportMassEndDate: todayStr(), exportMassNetwork: '', exportMassStoreId: '' };
+const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', pendenciaDate: todayStr(), pendenciaGroup: '', pendenciaResponsible: '', pendenciaType: '', pendenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '', separatorEditorId: '', separatorEditorNetwork: '', separatorEditorSearch: '', folhagensSeparatorId: '', folhagensSeparatorDate: todayStr(), exportMassStartDate: `${todayStr().slice(0, 8)}01`, exportMassEndDate: todayStr(), exportMassNetwork: '', exportMassStoreId: '', userSearch: '' };
 let firebaseDb = null;
 let firebaseRootRef = null;
 let unsubscribeFirebase = null;
@@ -4459,7 +4459,9 @@ function getSeparatorLinkForStore(store) {
 
 function getStoreSeparator(store, state = appState) {
   const configured = store?.id ? getSeparatorForStoreId(store.id, state) : null;
-  return String(configured?.name || store?.separator || store?.separatorName || getSeparatorLinkForStore(store)?.separator || '').trim();
+  if (configured?.name) return String(configured.name).trim();
+  if (store?.separatorDisabled === true) return '';
+  return String(store?.separator || store?.separatorName || getSeparatorLinkForStore(store)?.separator || '').trim();
 }
 
 function storeNeedsCommercialConciliation(store) {
@@ -4535,8 +4537,8 @@ function enrichStoreCommercialLinks(state) {
   (state?.stores || []).forEach((store) => {
     const link = getSeparatorLinkForStore(store);
     if (link) {
-      if (!String(store.separator || '').trim()) store.separator = link.separator;
-      if (!String(store.separatorRaw || '').trim()) store.separatorRaw = link.separatorRaw;
+      if (store.separatorDisabled !== true && !String(store.separator || '').trim()) store.separator = link.separator;
+      if (store.separatorDisabled !== true && !String(store.separatorRaw || '').trim()) store.separatorRaw = link.separatorRaw;
       if (!String(store.sourceRede || '').trim()) store.sourceRede = link.rede;
       if (!String(store.network || '').trim()) store.network = link.network;
       if (!String(store.rede || '').trim()) store.rede = link.rede;
@@ -7041,6 +7043,7 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     store.rede = network.toUpperCase();
     store.separator = separator;
     store.separatorRaw = separator;
+    store.separatorDisabled = false;
     const noPromoter = hasFixedPromoterInput === 'no' || validationModeInput === 'driver_only' || !!store.supportPoint;
     store.validationMode = noPromoter ? 'driver_only' : validationModeInput;
     store.noPromoter = noPromoter;
@@ -7487,6 +7490,89 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     audit('Separadores', 'Separador criado', `${actor.name} criou o separador ${name}.`);
   }
 
+
+  if (type === 'RENAME_SEPARATOR') {
+    if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode alterar o nome de separadores.' };
+    ensureSeparatorSeedAndShape(state);
+    const separator = (state.separators || []).find((item) => item.id === payload.separatorId && item.active !== false);
+    if (!separator) return { ok: false, error: 'Separador não encontrado.' };
+    const oldName = String(separator.name || '').trim();
+    const newName = String(payload.name || '').trim();
+    if (newName.length < 2) return { ok: false, error: 'Informe um nome válido para o separador.' };
+    if (normalizeText(oldName) === normalizeText(newName)) return { ok: false, error: 'O novo nome é igual ao nome atual.' };
+    if ((state.separators || []).some((item) => item.id !== separator.id && item.active !== false && normalizeText(item.name) === normalizeText(newName))) {
+      return { ok: false, error: 'Já existe outro separador ativo com esse nome.' };
+    }
+
+    const linkedStoreIds = new Set(Array.isArray(separator.storeIds) ? separator.storeIds : []);
+    separator.name = newName;
+    separator.updatedAt = nowIso();
+    separator.updatedBy = actor.name;
+    separator.updatedById = actor.id;
+    separator.previousNames = Array.isArray(separator.previousNames) ? separator.previousNames : [];
+    if (oldName && !separator.previousNames.some((name) => normalizeText(name) === normalizeText(oldName))) separator.previousNames.push(oldName);
+
+    const rawSeparatorName = (value) => {
+      const raw = String(value || '').trim();
+      if (!raw) return newName;
+      const markerIndex = normalizeText(raw).indexOf('separador');
+      if (markerIndex < 0) return newName;
+      const match = raw.match(/^(.*?separador)\s+.*$/i);
+      return match ? `${match[1]} ${newName.toUpperCase()}` : newName;
+    };
+
+    (state.stores || []).forEach((store) => {
+      const matchesOldName = normalizeText(store.separator || store.separatorName || '') === normalizeText(oldName);
+      if (!linkedStoreIds.has(store.id) && !matchesOldName) return;
+      store.separator = newName;
+      store.separatorDisabled = false;
+      if ('separatorName' in store) store.separatorName = newName;
+      if (store.separatorRaw || matchesOldName) store.separatorRaw = rawSeparatorName(store.separatorRaw);
+    });
+
+    // Os lançamentos históricos mantêm o mesmo vínculo operacional, mas passam a exibir o novo nome.
+    (state.movements?.outbounds || []).forEach((outbound) => {
+      if (linkedStoreIds.has(outbound.storeId) || normalizeText(outbound.separator || '') === normalizeText(oldName)) {
+        outbound.separator = newName;
+      }
+    });
+
+    audit('Separadores', 'Separador renomeado', `${actor.name} alterou ${oldName} para ${newName}. Vínculos de lojas e lançamentos históricos foram atualizados sem alterar o ID do separador.`);
+  }
+
+  if (type === 'DELETE_SEPARATOR') {
+    if (actor.role !== 'admin') return { ok: false, error: 'Somente o ADM pode excluir separadores.' };
+    ensureSeparatorSeedAndShape(state);
+    const separator = (state.separators || []).find((item) => item.id === payload.separatorId && item.active !== false);
+    if (!separator) return { ok: false, error: 'Separador não encontrado.' };
+    const reason = String(payload.reason || '').trim();
+    if (reason.length < 4) return { ok: false, error: 'Informe o motivo da exclusão.' };
+    const oldName = String(separator.name || '').trim();
+    const linkedStoreIds = new Set(Array.isArray(separator.storeIds) ? separator.storeIds : []);
+
+    separator.active = false;
+    separator.deletedAt = nowIso();
+    separator.deletedBy = actor.name;
+    separator.deletedById = actor.id;
+    separator.deleteReason = reason;
+    separator.updatedAt = nowIso();
+    separator.updatedBy = actor.name;
+    separator.updatedById = actor.id;
+
+    // Remove apenas os vínculos atuais. O histórico de lançamentos permanece preservado para auditoria.
+    (state.stores || []).forEach((store) => {
+      const matchesOldName = normalizeText(store.separator || store.separatorName || '') === normalizeText(oldName);
+      if (!linkedStoreIds.has(store.id) && !matchesOldName) return;
+      if (matchesOldName || linkedStoreIds.has(store.id)) {
+        store.separator = '';
+        store.separatorDisabled = true;
+        if ('separatorName' in store) store.separatorName = '';
+        if ('separatorRaw' in store) store.separatorRaw = '';
+      }
+    });
+    audit('Separadores', 'Separador excluído', `${actor.name} desativou ${oldName}. ${linkedStoreIds.size} vínculo(s) atual(is) de loja foram removidos. Histórico operacional preservado. Motivo: ${reason}.`);
+  }
+
   if (type === 'UPDATE_SEPARATOR_STORES') {
     if (!['admin', 'cd'].includes(actor.role)) return { ok: false, error: 'Somente ADM ou CD pode salvar lojas no separador.' };
     ensureSeparatorSeedAndShape(state);
@@ -7494,11 +7580,44 @@ function applyMutation(state, type, payload, user, commitAudit = true) {
     if (!separator) return { ok: false, error: 'Selecione um separador válido.' };
     const validStoreIds = new Set(getActiveStores(state).map((store) => store.id));
     const storeIds = [...new Set((payload.storeIds || []).filter((storeId) => validStoreIds.has(storeId)))];
-    const previousCount = (separator.storeIds || []).length;
+    const previousStoreIds = new Set(Array.isArray(separator.storeIds) ? separator.storeIds : []);
+    const selectedSet = new Set(storeIds);
+    const previousCount = previousStoreIds.size;
+
+    // Uma loja só pode pertencer a um separador ativo por vez.
+    (state.separators || []).forEach((other) => {
+      if (other.id === separator.id || other.active === false || !Array.isArray(other.storeIds)) return;
+      other.storeIds = other.storeIds.filter((storeId) => !selectedSet.has(storeId));
+    });
+
     separator.storeIds = storeIds;
     separator.updatedAt = nowIso();
     separator.updatedBy = actor.name;
     separator.updatedById = actor.id;
+
+    (state.stores || []).forEach((store) => {
+      if (selectedSet.has(store.id)) {
+        store.separator = separator.name;
+        store.separatorDisabled = false;
+        if ('separatorName' in store) store.separatorName = separator.name;
+        if ('separatorRaw' in store) store.separatorRaw = separator.name;
+        return;
+      }
+      if (!previousStoreIds.has(store.id)) return;
+      const replacement = (state.separators || []).find((item) => item.id !== separator.id && item.active !== false && Array.isArray(item.storeIds) && item.storeIds.includes(store.id));
+      if (replacement) {
+        store.separator = replacement.name;
+        store.separatorDisabled = false;
+        if ('separatorName' in store) store.separatorName = replacement.name;
+        if ('separatorRaw' in store) store.separatorRaw = replacement.name;
+      } else if (normalizeText(store.separator || store.separatorName || '') === normalizeText(separator.name)) {
+        store.separator = '';
+        store.separatorDisabled = true;
+        if ('separatorName' in store) store.separatorName = '';
+        if ('separatorRaw' in store) store.separatorRaw = '';
+      }
+    });
+
     audit('Separadores', 'Lojas do separador atualizadas', `${actor.name} atualizou ${separator.name}: antes ${previousCount} loja(s), agora ${storeIds.length} loja(s).`);
   }
 
@@ -11523,83 +11642,83 @@ function renderSeparadores() {
     const separatorOptions = separators.map((separator) => `<option value="${escapeHtml(separator.id)}" ${separator.id === selected?.id ? 'selected' : ''}>${escapeHtml(separator.name || 'Separador')}</option>`).join('');
 
     return `
-      <div class="grid-2">
-        <div class="card stack">
-          <div class="section-header">
-            <div>
-              <h3>Cadastrar separador</h3>
-              <p>Cadastre apenas o nome do separador.</p>
-            </div>
+      <div class="stack separator-admin-page">
+        <div class="card separator-admin-toolbar">
+          <div class="separator-toolbar-copy">
+            <h3>Separadores</h3>
+            <p class="muted">Cadastre, renomeie e organize as lojas de cada separador em uma única tela.</p>
           </div>
-          <form id="form-create-separator" class="stack">
-            <label>Nome do separador
-              <input type="text" name="separatorName" placeholder="Ex.: Separador 1, Anderson, Caio..." required />
+          <form id="form-create-separator" class="separator-create-inline">
+            <label>Novo separador
+              <input type="text" name="separatorName" placeholder="Nome do separador" required />
             </label>
-            <div class="form-actions">
-              <button type="submit" class="btn btn-primary">Salvar separador</button>
-            </div>
+            <button type="submit" class="btn btn-primary">Adicionar</button>
           </form>
-
-          <div class="section-header" style="margin-top:14px">
-            <div>
-              <h3>Separadores cadastrados</h3>
-              <p>${separators.length} separador(es) ativo(s).</p>
-            </div>
-          </div>
-          <div class="list">
-            ${separators.length ? separators.map((item) => `
-              <button type="button" class="list-item btn-select-separator ${item.id === selected?.id ? 'active' : ''}" data-id="${escapeHtml(item.id)}">
-                <div class="list-item-head">
-                  <strong>${escapeHtml(item.name || 'Separador')}</strong>
-                  <span class="tag info">${Array.isArray(item.storeIds) ? item.storeIds.length : 0} loja(s)</span>
-                </div>
-              </button>
-            `).join('') : `<div class="helper-card compact small">Nenhum separador cadastrado.</div>`}
-          </div>
         </div>
 
-        <div class="card stack">
-          <div class="section-header">
-            <div>
-              <h3>Salvar lojas no separador</h3>
-              <p>Selecione o separador, marque as lojas e salve.</p>
+        <div class="separator-admin-grid">
+          <div class="card separator-list-card">
+            <div class="compact-card-head">
+              <div><h4>Cadastrados</h4><small class="muted">${separators.length} ativo(s)</small></div>
+            </div>
+            <div class="separator-compact-list">
+              ${separators.length ? separators.map((item) => `
+                <button type="button" class="separator-compact-item btn-select-separator ${item.id === selected?.id ? 'active' : ''}" data-id="${escapeHtml(item.id)}">
+                  <span class="separator-compact-name">${escapeHtml(item.name || 'Separador')}</span>
+                  <span class="separator-compact-count">${Array.isArray(item.storeIds) ? item.storeIds.length : 0}</span>
+                </button>
+              `).join('') : `<div class="empty compact-empty">Nenhum separador cadastrado.</div>`}
             </div>
           </div>
-          ${selected ? `
-            <form id="form-separator-stores" class="stack">
-              <label>Separador
-                <select name="separatorId" required>${separatorOptions}</select>
-              </label>
-              <div class="form-grid">
-                <label>Rede
-                  <select name="network"><option value="">Todas as redes</option>${networkOptions}</select>
+
+          <div class="card separator-editor-card">
+            ${selected ? `
+              <div class="separator-editor-head">
+                <div>
+                  <small class="muted">Separador selecionado</small>
+                  <h3>${escapeHtml(selected.name || 'Separador')}</h3>
+                </div>
+                <span class="tag info">${selectedStoreIds.size} loja(s)</span>
+              </div>
+
+              <form id="form-rename-separator" class="separator-name-actions">
+                <input type="hidden" name="separatorId" value="${escapeHtml(selected.id)}" />
+                <label>Nome
+                  <input type="text" name="separatorName" value="${escapeHtml(selected.name || '')}" required />
                 </label>
-                <label>Buscar loja
-                  <input type="search" name="search" value="${escapeHtml(searchRaw)}" placeholder="Digite o nome da loja" />
-                </label>
-              </div>
-              <div class="helper-card compact small">
-                Selecionado: <strong>${escapeHtml(selected.name || 'Separador')}</strong> • Lojas salvas nele: <strong>${selectedStoreIds.size}</strong>
-              </div>
-              <div class="table-wrap" style="max-height:520px; overflow:auto">
-                <table>
-                  <thead><tr><th style="width:60px">Usar</th><th>Loja</th><th>Rede</th></tr></thead>
-                  <tbody>
-                    ${stores.map((store) => `
-                      <tr>
-                        <td><input type="checkbox" name="storeIds" value="${escapeHtml(store.id)}" ${selectedStoreIds.has(store.id) ? 'checked' : ''} /></td>
-                        <td><strong>${escapeHtml(getStoreNameSafe(store))}</strong></td>
-                        <td>${escapeHtml(getNetworkSafe(store))}</td>
-                      </tr>
-                    `).join('') || `<tr><td colspan="3" class="center muted">Nenhuma loja encontrada.</td></tr>`}
-                  </tbody>
-                </table>
-              </div>
-              <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Salvar lojas no separador</button>
-              </div>
-            </form>
-          ` : `<div class="helper-card compact small">Cadastre um separador para vincular lojas.</div>`}
+                <button type="submit" class="btn btn-secondary">Salvar nome</button>
+                ${currentUser.role === 'admin' ? `<button type="button" class="btn btn-danger" id="btn-delete-separator" data-id="${escapeHtml(selected.id)}">Excluir</button>` : ''}
+              </form>
+              <div class="separator-history-note">Ao renomear, o ID é mantido e o novo nome é aplicado aos vínculos atuais e aos lançamentos históricos desse separador.</div>
+
+              <form id="form-separator-stores" class="separator-stores-form">
+                <input type="hidden" name="separatorId" value="${escapeHtml(selected.id)}" />
+                <div class="separator-store-toolbar">
+                  <label>Rede
+                    <select name="network"><option value="">Todas as redes</option>${networkOptions}</select>
+                  </label>
+                  <label>Buscar loja
+                    <input type="search" name="search" value="${escapeHtml(searchRaw)}" placeholder="Digite o nome da loja" />
+                  </label>
+                  <button type="submit" class="btn btn-primary">Salvar lojas</button>
+                </div>
+                <div class="table-wrap separator-store-table-wrap">
+                  <table class="separator-store-table">
+                    <thead><tr><th class="compact-check-col">Usar</th><th>Loja</th><th>Rede</th></tr></thead>
+                    <tbody>
+                      ${stores.map((store) => `
+                        <tr>
+                          <td><input type="checkbox" name="storeIds" value="${escapeHtml(store.id)}" ${selectedStoreIds.has(store.id) ? 'checked' : ''} /></td>
+                          <td><strong>${escapeHtml(getStoreNameSafe(store))}</strong></td>
+                          <td>${escapeHtml(getNetworkSafe(store))}</td>
+                        </tr>
+                      `).join('') || `<tr><td colspan="3" class="center muted">Nenhuma loja encontrada.</td></tr>`}
+                    </tbody>
+                  </table>
+                </div>
+              </form>
+            ` : `<div class="empty">Cadastre um separador para começar.</div>`}
+          </div>
         </div>
       </div>
     `;
@@ -15568,168 +15687,63 @@ function renderUsuarios() {
     <option value="">Selecione a rota</option>
     ${sortedRoutes.map((route) => `<option value="${route.id}" ${route.id === selectedId ? 'selected' : ''}>${route.name}</option>`).join('')}
   `;
+  const userSearch = viewFilters.userSearch || '';
 
   return `
-    <div class="stack">
-      <div class="card">
-        <div class="page-header">
-          <div>
-            <h3>Permissões por perfil</h3>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Perfil</th><th>O que visualiza</th></tr></thead>
-            <tbody>
-              <tr><td>ADM</td><td>Todas as abas, usuários, configurações e dados gerais.</td></tr>
-              <tr><td>CD</td><td>Saídas, resumo de envios, retornos, pendências e Dashboard do CD. O ADM define se cada usuário pode lançar folhagens, bandejas ou ambos.</td></tr>
-              <tr><td>Motorista</td><td>Somente entregas, recolhimentos, divergências e pendências da rota vinculada.</td></tr>
-              <tr><td>Promotor</td><td>Somente recebimento, estoque, inventário e pendências da própria loja.</td></tr>
-              <tr><td>Visualizador</td><td>Visão gerencial concentrada na Dashboard.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div class="card">
-        <div class="page-header">
-          <div>
-            <h3>Criar novo usuário</h3>
-          </div>
-        </div>
-
-        <form id="form-novo-usuario" class="stack">
-          <div class="form-grid-3">
-            <label>Nome
-              <input type="text" name="name" placeholder="Nome do usuário" required />
-            </label>
-            <label>Perfil
-              <select name="role" id="novo-usuario-role" required>
-                ${roleOptions}
-              </select>
-            </label>
-            <label>Login
-              <input type="text" name="username" placeholder="ex.: motorvinicius" required />
-            </label>
-          </div>
-
-          <div class="form-grid-3">
-            <label>Senha inicial
-              <input type="text" name="password" value="${INITIAL_PASSWORD}" minlength="6" required />
-            </label>
-            <label id="novo-usuario-store-wrap" class="hidden">Loja vinculada
-              <select name="storeId">
-                ${buildStoreOptions('')}
-              </select>
-            </label>
-            <label id="novo-usuario-route-wrap" class="hidden">Rota vinculada
-              <select name="routeId">
-                ${buildRouteOptions('')}
-              </select>
-            </label>
-            <div id="novo-usuario-box-wrap" class="hidden">
-              <strong>Caixas que pode lançar</strong>
-              ${renderBoxTypePermissionChecks('', BOX_TYPES.map((item) => item.key), 'new-user-box-permission')}
-            </div>
-          </div>
-
-          <div class="form-actions">
-            <button type="submit" class="btn btn-primary">Criar usuário</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="card">
-        <div class="page-header">
-          <div>
-            <h3>Motorista folguista</h3>
-            <p class="muted">Controle a rota diária do Caio ou de outro folguista. O motorista só consegue escolher uma vez por dia; o ADM pode corrigir.</p>
-          </div>
-        </div>
-        ${reliefUsers.length ? `
-          <form id="form-folguista-rota-adm" class="stack">
-            <div class="form-grid-3">
-              <label>Folguista
-                <select name="userId" required>
-                  ${reliefUsers.map((user) => `<option value="${user.id}">${user.name} • ${user.username}</option>`).join('')}
-                </select>
-              </label>
-              <label>Data
-                <input type="date" name="date" value="${todayStr()}" required />
-              </label>
-              <label>Rota do dia
-                <select name="routeId" required>
-                  ${buildRouteOptions('')}
-                </select>
-              </label>
-            </div>
-            <label>Motivo da alteração pelo ADM
-              <input type="text" name="reason" placeholder="Ex.: folga do motorista fixo / correção de rota escolhida errada" />
-            </label>
-            <div class="form-actions">
-              <button type="submit" class="btn btn-secondary">Definir/alterar rota do folguista</button>
-            </div>
-          </form>
-          <div class="table-wrap" style="margin-top:14px">
-            <table>
-              <thead><tr><th>Data</th><th>Folguista</th><th>Rota</th><th>Status</th><th>Definido por</th></tr></thead>
-              <tbody>
-                ${(appState.reliefDriverAssignments || []).filter((item) => reliefUsers.some((user) => user.id === item.userId)).slice(0, 12).map((item) => `
-                  <tr>
-                    <td>${formatDateBR(item.date)}</td>
-                    <td>${getUserById(item.userId)?.name || item.userName || '-'}</td>
-                    <td>${getRouteById(item.routeId)?.name || item.routeName || '-'}</td>
-                    <td>${item.canceledAt ? '<span class="tag warn">Substituída</span>' : '<span class="tag ok">Ativa</span>'}</td>
-                    <td>${item.selectedBy || '-'}</td>
-                  </tr>
-                `).join('') || '<tr><td colspan="5" class="center muted">Nenhuma rota de folguista definida ainda.</td></tr>'}
-              </tbody>
-            </table>
-          </div>
-        ` : '<div class="empty">Nenhum motorista folguista cadastrado.</div>'}
-      </div>
-
-      <div class="card">
-        <div class="page-header">
+    <div class="stack users-admin-page">
+      <div class="card users-management-card">
+        <div class="users-management-head">
           <div>
             <h3>Usuários cadastrados</h3>
+            <p class="muted">Localize um usuário e altere somente o que precisa.</p>
           </div>
+          <label class="user-search-field">Buscar usuário
+            <input type="search" id="user-search-filter" value="${escapeHtml(userSearch)}" placeholder="Digite o nome ou login" autocomplete="off" />
+          </label>
         </div>
-        <div class="form-actions" style="margin-bottom:12px">
-          <button type="button" class="btn btn-ghost" id="btn-select-all-users">Selecionar todos</button>
-          <button type="button" class="btn btn-ghost" id="btn-clear-user-selection">Limpar seleção</button>
-          <button type="button" class="btn btn-danger" id="btn-delete-selected-users">Excluir selecionados</button>
-          <span class="muted" id="selected-users-count">0 selecionados</span>
+
+        <div class="users-bulk-toolbar">
+          <div class="users-bulk-actions">
+            <button type="button" class="btn btn-ghost btn-small" id="btn-select-all-users">Selecionar visíveis</button>
+            <button type="button" class="btn btn-ghost btn-small" id="btn-clear-user-selection">Limpar</button>
+            <button type="button" class="btn btn-danger btn-small" id="btn-delete-selected-users">Excluir selecionados</button>
+          </div>
+          <div class="users-list-counter"><strong id="visible-users-count">${sortedUsers.length}</strong> de ${sortedUsers.length} usuário(s) • <span id="selected-users-count">0 selecionado(s)</span></div>
         </div>
-        <div class="table-wrap users-table-wrap">
-          <table class="users-admin-table">
+
+        <div class="table-wrap users-table-wrap compact-users-table-wrap">
+          <table class="users-admin-table compact-users-table">
             <thead>
               <tr>
-                <th>Selecionar</th>
-                <th>Nome</th>
+                <th class="compact-check-col"></th>
+                <th>Usuário</th>
                 <th>Perfil</th>
-                <th>Loja/Rota vinculada</th>
-                <th>Usuário de login</th>
-                <th>Senha atual</th>
-                <th>Status</th>
-                <th>Permissão</th>
-                <th>Ação</th>
+                <th>Vínculo</th>
+                <th>Acessos</th>
+                <th class="compact-action-col"></th>
               </tr>
             </thead>
-            <tbody>
-              ${sortedUsers.map((user) => `
-                <tr data-user-id="${user.id}">
-                  <td data-label="Selecionar">
+            <tbody id="users-table-body">
+              ${sortedUsers.map((user) => {
+                const searchText = normalizeText(`${user.name || ''} ${user.username || ''} ${ROLE_LABELS[user.role] || user.role || ''} ${getUserAccessTarget(user) || ''}`);
+                return `
+                <tr data-user-id="${user.id}" data-user-search="${escapeHtml(searchText)}">
+                  <td data-label="Selecionar" class="user-select-cell">
                     <input type="checkbox" class="user-delete-check" value="${user.id}" ${user.id === currentUser.id ? 'disabled' : ''} title="${user.id === currentUser.id ? 'Você não pode excluir o usuário logado' : 'Selecionar usuário'}" />
                   </td>
-                  <td data-label="Nome">
-                    <input class="user-name-input" type="text" value="${escapeHtml(formatNameForInput(user))}" data-user-id="${user.id}" />
+                  <td data-label="Usuário">
+                    <div class="user-identity-fields">
+                      <input class="user-name-input" type="text" value="${escapeHtml(formatNameForInput(user))}" data-user-id="${user.id}" aria-label="Nome de ${escapeHtml(user.name)}" />
+                      <input class="user-login-input" type="text" value="${escapeHtml(user.username)}" data-user-id="${user.id}" aria-label="Login de ${escapeHtml(user.name)}" />
+                    </div>
+                    <div class="user-row-status">${mustChangePassword(user) ? '<span class="tag warn">Primeiro acesso</span>' : '<span class="tag ok">Ativo</span>'}</div>
                   </td>
                   <td data-label="Perfil">
                     <select class="user-role-select" data-user-id="${user.id}">
                       ${Object.entries(ROLE_LABELS).map(([key, label]) => `<option value="${key}" ${key === user.role ? 'selected' : ''}>${label}</option>`).join('')}
                     </select>
                   </td>
-                  <td data-label="Loja/Rota vinculada">
+                  <td data-label="Vínculo">
                     <div class="user-target-edit">
                       <select class="user-store-select user-target-select ${user.role === 'promoter' ? '' : 'hidden'}" data-user-id="${user.id}">
                         ${buildStoreOptions(user.storeId || '')}
@@ -15740,23 +15754,68 @@ function renderUsuarios() {
                       <span class="user-target-static ${user.role === 'promoter' || (user.role === 'driver' && !isReliefDriver(user)) ? 'hidden' : ''}" data-user-id="${user.id}">${getUserAccessTarget(user)}</span>
                     </div>
                   </td>
-                  <td data-label="Usuário de login">
-                    <input class="user-login-input" type="text" value="${escapeHtml(user.username)}" data-user-id="${user.id}" />
+                  <td data-label="Acessos">
+                    <div class="user-access-compact">
+                      ${renderUserPermissionControls(user)}
+                      ${user.role === 'cd' ? `<details class="permissions-details box-permissions-details"><summary>Tipos de caixa</summary><div class="box-permissions-block">${renderBoxTypePermissionChecks(user.id, user.allowedBoxTypes || BOX_TYPES.map((item) => item.key))}</div></details>` : ''}
+                    </div>
                   </td>
-                  <td data-label="Senha atual"><strong>${escapeHtml(user.password)}</strong></td>
-                  <td data-label="Status">${mustChangePassword(user) ? '<span class="tag warn">Primeiro acesso pendente</span>' : '<span class="tag ok">Senha alterada</span>'}</td>
-                  <td data-label="Permissão">
-                    <small class="muted">${getPermissionLabel(user)}</small>
-                    ${renderUserPermissionControls(user)}
-                    ${user.role === 'cd' ? `<div class="box-permissions-block"><strong>Caixas permitidas</strong>${renderBoxTypePermissionChecks(user.id, user.allowedBoxTypes || BOX_TYPES.map((item) => item.key))}</div>` : ''}
-                  </td>
-                  <td data-label="Ação"><button type="button" class="btn btn-secondary btn-save-user" data-user-id="${user.id}">Salvar alterações</button></td>
+                  <td data-label="Ação" class="user-action-cell"><button type="button" class="btn btn-secondary btn-save-user btn-small" data-user-id="${user.id}">Salvar</button></td>
                 </tr>
-              `).join('')}
+              `;}).join('')}
+              <tr id="users-empty-filter-row" class="hidden"><td colspan="6"><div class="empty compact-empty">Nenhum usuário encontrado com esse filtro.</div></td></tr>
             </tbody>
           </table>
         </div>
       </div>
+
+      <details class="card compact-admin-details" id="create-user-panel">
+        <summary><span><strong>Criar novo usuário</strong><small>Cadastro e vínculo inicial</small></span><span class="details-chevron">⌄</span></summary>
+        <div class="compact-admin-details-body">
+          <form id="form-novo-usuario" class="stack">
+            <div class="form-grid-3">
+              <label>Nome<input type="text" name="name" placeholder="Nome do usuário" required /></label>
+              <label>Perfil<select name="role" id="novo-usuario-role" required>${roleOptions}</select></label>
+              <label>Login<input type="text" name="username" placeholder="ex.: motorvinicius" required /></label>
+            </div>
+            <div class="form-grid-3">
+              <label>Senha inicial<input type="text" name="password" value="${INITIAL_PASSWORD}" minlength="6" required /></label>
+              <label id="novo-usuario-store-wrap" class="hidden">Loja vinculada<select name="storeId">${buildStoreOptions('')}</select></label>
+              <label id="novo-usuario-route-wrap" class="hidden">Rota vinculada<select name="routeId">${buildRouteOptions('')}</select></label>
+              <div id="novo-usuario-box-wrap" class="hidden"><strong>Caixas que pode lançar</strong>${renderBoxTypePermissionChecks('', BOX_TYPES.map((item) => item.key), 'new-user-box-permission')}</div>
+            </div>
+            <div class="form-actions"><button type="submit" class="btn btn-primary">Criar usuário</button></div>
+          </form>
+        </div>
+      </details>
+
+      ${reliefUsers.length ? `
+        <details class="card compact-admin-details">
+          <summary><span><strong>Motorista folguista</strong><small>Rota diária e correções do ADM</small></span><span class="details-chevron">⌄</span></summary>
+          <div class="compact-admin-details-body">
+            <form id="form-folguista-rota-adm" class="stack">
+              <div class="form-grid-3">
+                <label>Folguista<select name="userId" required>${reliefUsers.map((user) => `<option value="${user.id}">${user.name} • ${user.username}</option>`).join('')}</select></label>
+                <label>Data<input type="date" name="date" value="${todayStr()}" required /></label>
+                <label>Rota do dia<select name="routeId" required>${buildRouteOptions('')}</select></label>
+              </div>
+              <label>Motivo da alteração pelo ADM<input type="text" name="reason" placeholder="Ex.: folga do motorista fixo / correção" /></label>
+              <div class="form-actions"><button type="submit" class="btn btn-secondary">Definir rota</button></div>
+            </form>
+          </div>
+        </details>
+      ` : ''}
+
+      <details class="card compact-admin-details">
+        <summary><span><strong>Regras de acesso por perfil</strong><small>Referência rápida das permissões padrão</small></span><span class="details-chevron">⌄</span></summary>
+        <div class="compact-admin-details-body role-reference-grid">
+          <div><strong>ADM</strong><span>Acesso total</span></div>
+          <div><strong>CD</strong><span>Operação do CD conforme permissões liberadas</span></div>
+          <div><strong>Motorista</strong><span>Rota, entregas e recolhimentos vinculados</span></div>
+          <div><strong>Promotor</strong><span>Loja vinculada e validações permitidas</span></div>
+          <div><strong>Visualizador</strong><span>Visão gerencial</span></div>
+        </div>
+      </details>
     </div>
   `;
 }
@@ -16088,13 +16147,20 @@ function bindExportacaoMassaEvents() {
 
 function bindSeparadoresEvents() {
   const createForm = document.getElementById('form-create-separator');
+  const renameForm = document.getElementById('form-rename-separator');
   const saveStoresForm = document.getElementById('form-separator-stores');
 
   createForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const input = createForm.querySelector('[name="separatorName"]') || createForm.querySelector('[name="name"]');
-    const result = await persistMutation('CREATE_SEPARATOR', { name: input?.value || '' }, 'Separador cadastrado com sucesso.');
-    if (result.ok) createForm.reset();
+    const separatorName = input?.value || '';
+    const result = await persistMutation('CREATE_SEPARATOR', { name: separatorName }, 'Separador cadastrado com sucesso.');
+    if (result.ok) {
+      createForm.reset();
+      const newest = getActiveSeparators(appState).find((item) => normalizeText(item.name) === normalizeText(separatorName));
+      if (newest) viewFilters.separatorEditorId = newest.id;
+      render();
+    }
   });
 
   document.querySelectorAll('.btn-select-separator').forEach((button) => {
@@ -16104,15 +16170,48 @@ function bindSeparadoresEvents() {
     });
   });
 
+  renameForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const separatorId = renameForm.separatorId?.value || viewFilters.separatorEditorId || '';
+    const name = renameForm.separatorName?.value || '';
+    const currentName = getSeparatorById(separatorId)?.name || '';
+    if (normalizeText(currentName) === normalizeText(name)) {
+      showToast('Altere o nome antes de salvar.', 'warn');
+      return;
+    }
+    const confirmed = window.confirm(`Alterar o nome do separador "${currentName}" para "${name.trim()}"?\n\nO novo nome será aplicado também aos vínculos e lançamentos históricos desse separador.`);
+    if (!confirmed) return;
+    const result = await persistMutation('RENAME_SEPARATOR', { separatorId, name }, 'Nome do separador atualizado em todo o sistema.');
+    if (result.ok) {
+      viewFilters.separatorEditorId = separatorId;
+      render();
+    }
+  });
+
+  document.getElementById('btn-delete-separator')?.addEventListener('click', async (event) => {
+    const separatorId = event.currentTarget.dataset.id || viewFilters.separatorEditorId || '';
+    const separator = getSeparatorById(separatorId);
+    if (!separator) return;
+    const confirmed = window.confirm(`Excluir o separador "${separator.name}"?\n\nOs vínculos atuais serão removidos. O histórico operacional continuará preservado para auditoria.`);
+    if (!confirmed) return;
+    const reason = window.prompt('Informe o motivo da exclusão:');
+    if (!String(reason || '').trim()) {
+      showToast('Motivo obrigatório para excluir o separador.', 'error');
+      return;
+    }
+    const result = await persistMutation('DELETE_SEPARATOR', { separatorId, reason }, 'Separador excluído com histórico preservado.');
+    if (result.ok) {
+      viewFilters.separatorEditorId = '';
+      viewFilters.folhagensSeparatorId = '';
+      render();
+    }
+  });
+
   if (saveStoresForm) {
     const separatorField = saveStoresForm.querySelector('[name="separatorId"]');
     const networkField = saveStoresForm.querySelector('[name="network"]');
     const searchField = saveStoresForm.querySelector('[name="search"]');
 
-    separatorField?.addEventListener('change', () => {
-      viewFilters.separatorEditorId = separatorField.value || '';
-      scheduleRender();
-    });
     networkField?.addEventListener('change', () => {
       viewFilters.separatorEditorNetwork = networkField.value || '';
       scheduleRender();
@@ -16127,7 +16226,10 @@ function bindSeparadoresEvents() {
       const separatorId = separatorField?.value || viewFilters.separatorEditorId || '';
       const storeIds = Array.from(saveStoresForm.querySelectorAll('input[name="storeIds"]:checked')).map((input) => input.value);
       const result = await persistMutation('UPDATE_SEPARATOR_STORES', { separatorId, storeIds }, 'Lojas salvas no separador.');
-      if (result.ok) viewFilters.separatorEditorId = separatorId;
+      if (result.ok) {
+        viewFilters.separatorEditorId = separatorId;
+        render();
+      }
     });
   }
 }
@@ -17146,6 +17248,24 @@ function bindUsuariosEvents() {
     });
   });
 
+  const userSearchInput = document.getElementById('user-search-filter');
+  const visibleUsersCount = document.getElementById('visible-users-count');
+  const emptyFilterRow = document.getElementById('users-empty-filter-row');
+  const applyUserSearch = () => {
+    const query = normalizeText(userSearchInput?.value || '');
+    viewFilters.userSearch = userSearchInput?.value || '';
+    let visible = 0;
+    document.querySelectorAll('#users-table-body tr[data-user-search]').forEach((row) => {
+      const matches = !query || String(row.dataset.userSearch || '').includes(query);
+      row.classList.toggle('hidden', !matches);
+      if (matches) visible += 1;
+    });
+    if (visibleUsersCount) visibleUsersCount.textContent = String(visible);
+    emptyFilterRow?.classList.toggle('hidden', visible > 0);
+  };
+  userSearchInput?.addEventListener('input', applyUserSearch);
+  applyUserSearch();
+
   const selectedUsersCount = document.getElementById('selected-users-count');
   const getSelectedUserIds = () => Array.from(document.querySelectorAll('.user-delete-check:checked')).map((item) => item.value);
   const updateSelectedUsersCount = () => {
@@ -17157,7 +17277,7 @@ function bindUsuariosEvents() {
   });
 
   document.getElementById('btn-select-all-users')?.addEventListener('click', () => {
-    document.querySelectorAll('.user-delete-check:not(:disabled)').forEach((checkbox) => {
+    document.querySelectorAll('#users-table-body tr[data-user-search]:not(.hidden) .user-delete-check:not(:disabled)').forEach((checkbox) => {
       checkbox.checked = true;
     });
     updateSelectedUsersCount();
