@@ -15760,7 +15760,12 @@ function renderUsuarios() {
                       ${user.role === 'cd' ? `<details class="permissions-details box-permissions-details"><summary>Tipos de caixa</summary><div class="box-permissions-block">${renderBoxTypePermissionChecks(user.id, user.allowedBoxTypes || BOX_TYPES.map((item) => item.key))}</div></details>` : ''}
                     </div>
                   </td>
-                  <td data-label="Ação" class="user-action-cell"><button type="button" class="btn btn-secondary btn-save-user btn-small" data-user-id="${user.id}">Salvar</button></td>
+                  <td data-label="Ação" class="user-action-cell">
+                    <div class="user-row-actions">
+                      <button type="button" class="btn btn-ghost btn-change-user-password btn-small" data-user-id="${user.id}">Alterar senha</button>
+                      <button type="button" class="btn btn-secondary btn-save-user btn-small" data-user-id="${user.id}">Salvar</button>
+                    </div>
+                  </td>
                 </tr>
               `;}).join('')}
               <tr id="users-empty-filter-row" class="hidden"><td colspan="6"><div class="empty compact-empty">Nenhum usuário encontrado com esse filtro.</div></td></tr>
@@ -17157,6 +17162,129 @@ function bindRotasEvents() {
   });
 }
 
+
+function ensureAdminPasswordModal() {
+  let modal = document.getElementById('admin-user-password-modal');
+  if (modal) return modal;
+
+  modal = document.createElement('div');
+  modal.id = 'admin-user-password-modal';
+  modal.className = 'admin-password-modal hidden';
+  modal.setAttribute('aria-hidden', 'true');
+  modal.innerHTML = `
+    <div class="admin-password-modal-backdrop" data-password-modal-close="1"></div>
+    <section class="admin-password-modal-card" role="dialog" aria-modal="true" aria-labelledby="admin-user-password-title">
+      <div class="admin-password-modal-head">
+        <div>
+          <span class="admin-password-kicker">Usuários</span>
+          <h3 id="admin-user-password-title">Alterar senha</h3>
+          <p id="admin-user-password-subtitle" class="muted">Defina uma nova senha para este usuário.</p>
+        </div>
+        <button type="button" class="icon-btn admin-password-close" data-password-modal-close="1" aria-label="Fechar">×</button>
+      </div>
+      <form id="admin-user-password-form" class="admin-password-form">
+        <input type="hidden" id="admin-user-password-id" />
+        <label>Nova senha
+          <input type="password" id="admin-user-new-password" minlength="6" autocomplete="new-password" placeholder="Digite a nova senha" required />
+        </label>
+        <label>Confirmar nova senha
+          <input type="password" id="admin-user-confirm-password" minlength="6" autocomplete="new-password" placeholder="Confirme a nova senha" required />
+        </label>
+        <div class="admin-password-feedback" id="admin-user-password-feedback"></div>
+        <div class="admin-password-actions">
+          <button type="button" class="btn btn-ghost" data-password-modal-close="1">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Salvar nova senha</button>
+        </div>
+      </form>
+    </section>`;
+
+  document.body.appendChild(modal);
+
+  const closeModal = () => {
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+    const form = modal.querySelector('#admin-user-password-form');
+    form?.reset();
+    const feedback = modal.querySelector('#admin-user-password-feedback');
+    if (feedback) feedback.textContent = '';
+  };
+
+  modal.querySelectorAll('[data-password-modal-close="1"]').forEach((button) => {
+    button.addEventListener('click', closeModal);
+  });
+
+  modal.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeModal();
+  });
+
+  modal.querySelector('#admin-user-password-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const userId = modal.querySelector('#admin-user-password-id')?.value || '';
+    const newPassword = modal.querySelector('#admin-user-new-password')?.value.trim() || '';
+    const confirmPassword = modal.querySelector('#admin-user-confirm-password')?.value.trim() || '';
+    const feedback = modal.querySelector('#admin-user-password-feedback');
+
+    if (!userId) {
+      if (feedback) feedback.textContent = 'Usuário não encontrado.';
+      return;
+    }
+    if (newPassword.length < 6) {
+      if (feedback) feedback.textContent = 'A nova senha precisa ter pelo menos 6 caracteres.';
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      if (feedback) feedback.textContent = 'As senhas digitadas não conferem.';
+      return;
+    }
+
+    const submit = event.submitter;
+    if (submit) submit.disabled = true;
+    try {
+      const result = await persistMutation(
+        'CHANGE_PASSWORD',
+        { userId, password: newPassword },
+        'Senha alterada com sucesso.'
+      );
+      if (!result.ok) {
+        if (feedback && result.error) feedback.textContent = result.error;
+        return;
+      }
+      closeModal();
+      render();
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+  });
+
+  return modal;
+}
+
+function openAdminPasswordModal(userId) {
+  if (currentUser?.role !== 'admin') return;
+  const user = getUserById(userId);
+  if (!user) {
+    showToast('Usuário não encontrado.', 'error');
+    return;
+  }
+
+  const modal = ensureAdminPasswordModal();
+  const userIdInput = modal.querySelector('#admin-user-password-id');
+  const subtitle = modal.querySelector('#admin-user-password-subtitle');
+  const newPasswordInput = modal.querySelector('#admin-user-new-password');
+  const confirmPasswordInput = modal.querySelector('#admin-user-confirm-password');
+  const feedback = modal.querySelector('#admin-user-password-feedback');
+
+  if (userIdInput) userIdInput.value = user.id;
+  if (subtitle) subtitle.textContent = `${user.name} • ${user.username}`;
+  if (newPasswordInput) newPasswordInput.value = '';
+  if (confirmPasswordInput) confirmPasswordInput.value = '';
+  if (feedback) feedback.textContent = '';
+
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  window.setTimeout(() => newPasswordInput?.focus(), 0);
+}
+
 function bindUsuariosEvents() {
   if (currentUser.role !== 'admin') return;
 
@@ -17228,6 +17356,10 @@ function bindUsuariosEvents() {
   document.querySelectorAll('.user-role-select').forEach((select) => {
     select.addEventListener('change', () => refreshUserTargetRow(select.dataset.userId));
     refreshUserTargetRow(select.dataset.userId);
+  });
+
+  document.querySelectorAll('.btn-change-user-password').forEach((button) => {
+    button.addEventListener('click', () => openAdminPasswordModal(button.dataset.userId));
   });
 
   document.querySelectorAll('.btn-save-user').forEach((button) => {

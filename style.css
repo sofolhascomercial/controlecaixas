@@ -1333,3 +1333,32 @@ body.public-dashboard-mode .sidebar-user-role::after{content:' • somente leitu
   .separator-create-inline,.separator-name-actions,.separator-store-toolbar{grid-template-columns:1fr}
   .separator-create-inline .btn,.separator-name-actions .btn,.separator-store-toolbar .btn{width:100%}
 }
+
+
+/* ============================================================
+   ADM — ALTERAÇÃO DE SENHA DE USUÁRIOS
+   ============================================================ */
+.user-row-actions{display:grid;gap:6px;justify-items:stretch;min-width:126px}
+.user-row-actions .btn{white-space:nowrap;width:100%}
+.compact-action-col{width:142px}
+.admin-password-modal{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:20px}
+.admin-password-modal.hidden{display:none}
+.admin-password-modal-backdrop{position:absolute;inset:0;background:rgba(15,23,18,.48);backdrop-filter:blur(3px)}
+.admin-password-modal-card{position:relative;z-index:1;width:min(100%,460px);background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:0 24px 70px rgba(20,55,32,.24);padding:20px}
+.admin-password-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.admin-password-modal-head h3{margin:2px 0 4px;font-size:1.2rem}
+.admin-password-modal-head p{margin:0;font-size:.82rem}
+.admin-password-kicker{display:block;color:var(--green-800);font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+.admin-password-close{flex:0 0 auto}
+.admin-password-form{display:grid;gap:13px;padding-top:16px}
+.admin-password-form label{display:grid;gap:6px;font-size:.8rem;color:var(--muted);font-weight:700}
+.admin-password-form input{min-height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:#fff;color:var(--text)}
+.admin-password-form input:focus{outline:none;border-color:#9fc9aa;box-shadow:0 0 0 3px rgba(25,133,63,.10)}
+.admin-password-feedback{min-height:18px;color:#c0392b;font-size:.78rem;font-weight:700}
+.admin-password-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:2px}
+@media(max-width:760px){
+  .user-row-actions{grid-template-columns:1fr 1fr;min-width:0}
+  .admin-password-modal{padding:12px}
+  .admin-password-modal-card{padding:16px;border-radius:14px}
+  .admin-password-actions{display:grid;grid-template-columns:1fr 1fr}
+}
