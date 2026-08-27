@@ -2,12 +2,15 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>Só Folhas | Controle de Caixas</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260824-alterar-senha-v1" />
+  <link rel="stylesheet" href="style.css?v=20260827-estabilidade-diagnostico-periodo-v1" />
 </head>
 <body>
   <div id="toast" class="toast"></div>
@@ -88,9 +91,29 @@
         </div>
 
         <div class="topbar-right">
-          <div class="topbar-date">
-            <span>Hoje</span>
-            <strong id="today-label"></strong>
+          <div class="period-control">
+            <button type="button" id="period-toggle" class="topbar-date period-toggle" aria-expanded="false" aria-controls="period-popover">
+              <span id="period-kicker">Hoje</span>
+              <strong id="today-label"></strong>
+              <small class="period-hint">Alterar período</small>
+            </button>
+            <div id="period-popover" class="period-popover hidden" role="dialog" aria-label="Selecionar período de análise">
+              <div class="period-popover-head">
+                <div><strong>Período de análise</strong><small>Não altera a data dos lançamentos.</small></div>
+                <button type="button" id="period-close" class="icon-btn" aria-label="Fechar seletor de período">×</button>
+              </div>
+              <div class="period-presets">
+                <button type="button" class="btn btn-ghost period-preset" data-period-preset="today">Hoje</button>
+                <button type="button" class="btn btn-ghost period-preset" data-period-preset="yesterday">Ontem</button>
+                <button type="button" class="btn btn-ghost period-preset" data-period-preset="last7">Últimos 7 dias</button>
+                <button type="button" class="btn btn-ghost period-preset" data-period-preset="month">Este mês</button>
+              </div>
+              <form id="period-custom-form" class="period-custom-form">
+                <label>Data inicial<input type="date" name="startDate" required /></label>
+                <label>Data final<input type="date" name="endDate" required /></label>
+                <button type="submit" class="btn btn-primary">Aplicar período</button>
+              </form>
+            </div>
           </div>
           <div class="topbar-user">
             <span id="topbar-user-name"></span>
@@ -108,6 +131,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="script.js?v=20260824-alterar-senha-v1"></script>
+  <script src="script.js?v=20260827-estabilidade-diagnostico-periodo-v1"></script>
 </body>
 </html>

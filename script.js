@@ -4086,6 +4086,7 @@ const VIEW_META = {
   exportacaoMassa: { title: 'Exportação em Massa', subtitle: 'Exportar resumos de caixas para Excel por período, rede e loja' },
   planilhasOperacionais: { title: 'Planilhas Operacionais', subtitle: 'Importação em massa por responsável com validação automática no Dashboard' },
   usuarios: { title: 'Usuários', subtitle: 'Contas de acesso e permissões do sistema' },
+  diagnosticos: { title: 'Diagnóstico / Erros', subtitle: 'Histórico técnico para localizar falhas por código, usuário e dispositivo' },
   configuracoes: { title: 'Configurações', subtitle: 'Parâmetros de estoque crítico, segurança e limites' },
 };
 
@@ -4116,6 +4117,7 @@ const NAV_ITEMS = [
   { key: 'exportacaoMassa', label: 'Exportação em Massa', roles: ['admin'] },
   { key: 'planilhasOperacionais', label: 'Planilhas Operacionais', roles: ['admin', 'cd', 'driver', 'promoter'] },
   { key: 'usuarios', label: 'Usuários', roles: ['admin'] },
+  { key: 'diagnosticos', label: 'Diagnóstico / Erros', roles: ['admin'] },
   { key: 'configuracoes', label: 'Configurações', roles: ['admin'] },
 ];
 
@@ -4154,6 +4156,7 @@ const MOBILE_ICON_BY_VIEW = {
   exportacaoMassa: '📤',
   planilhasOperacionais: '📑',
   usuarios: '👥',
+  diagnosticos: '🛠️',
   configuracoes: '⚙️',
 };
 
@@ -4172,7 +4175,14 @@ const PUBLIC_DASHBOARD_USER = {
 };
 let currentView = 'dashboard';
 let backendMode = 'local';
-const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', pendenciaDate: todayStr(), pendenciaGroup: '', pendenciaResponsible: '', pendenciaType: '', pendenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '', separatorEditorId: '', separatorEditorNetwork: '', separatorEditorSearch: '', folhagensSeparatorId: '', folhagensSeparatorDate: todayStr(), exportMassStartDate: `${todayStr().slice(0, 8)}01`, exportMassEndDate: todayStr(), exportMassNetwork: '', exportMassStoreId: '', userSearch: '' };
+const APP_VERSION = '2026.08.27-estabilidade-diagnostico-periodo-v1';
+const DIAGNOSTIC_LOCAL_KEY = 'sofolhas_caixas_diagnostics_v1';
+const FOLHAGENS_DRAFT_KEY = 'sofolhas_caixas_folhagens_draft_v1';
+const viewFilters = { resumoEnviosDate: todayStr(), resumoEnviosNetwork: '', resumoEnviosCdUserId: '', divergenciaOwner: '', divergenciaType: '', divergenciaDate: '', divergenciaSearch: '', pendenciaDate: todayStr(), pendenciaGroup: '', pendenciaResponsible: '', pendenciaType: '', pendenciaSearch: '', estornoExpressNetwork: '', estornoExpressSearch: '', separatorEditorId: '', separatorEditorNetwork: '', separatorEditorSearch: '', folhagensSeparatorId: '', folhagensSeparatorDate: todayStr(), exportMassStartDate: `${todayStr().slice(0, 8)}01`, exportMassEndDate: todayStr(), exportMassNetwork: '', exportMassStoreId: '', userSearch: '', analysisPreset: 'today', analysisStartDate: todayStr(), analysisEndDate: todayStr() };
+let activeFormEditLock = null;
+let pendingRemoteRender = false;
+let pendingRemoteRenderReason = '';
+let diagnosticWriteInProgress = false;
 let firebaseDb = null;
 let firebaseRootRef = null;
 let unsubscribeFirebase = null;
@@ -4221,6 +4231,11 @@ function showViewLoading(viewKey = currentView) {
 
 function navigateToView(viewKey) {
   if (!viewKey || !currentUser || !canAccessView(viewKey, currentUser)) return;
+  if (activeFormEditLock && viewKey !== currentView) {
+    const proceed = window.confirm('Há um preenchimento ainda não salvo. O rascunho será preservado para você continuar depois. Deseja sair desta tela?');
+    if (!proceed) return;
+    endFormEditLock({ renderPending: false });
+  }
   currentView = viewKey;
   if (els.sidebar) els.sidebar.classList.remove('open');
   if (els.sidebarNav) {
@@ -4257,6 +4272,11 @@ const els = {
   mainContent: document.getElementById('main-content'),
   mobileQuickNav: document.getElementById('mobile-quick-nav'),
   todayLabel: document.getElementById('today-label'),
+  periodKicker: document.getElementById('period-kicker'),
+  periodToggle: document.getElementById('period-toggle'),
+  periodPopover: document.getElementById('period-popover'),
+  periodClose: document.getElementById('period-close'),
+  periodCustomForm: document.getElementById('period-custom-form'),
   topbarUserName: document.getElementById('topbar-user-name'),
   topbarUserRole: document.getElementById('topbar-user-role'),
   toast: document.getElementById('toast'),
@@ -4265,14 +4285,28 @@ const els = {
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
-  appState = await loadState();
-  bindBaseEvents();
-  restoreSession();
-  render();
-  startFirebaseSync();
+  try {
+    appState = await loadState();
+    bindBaseEvents();
+    restoreSession();
+    render();
+    startFirebaseSync();
+  } catch (error) {
+    try { appState = ensureStateShape(appState || createSeedState()); } catch (seedError) { appState = createSeedState(); }
+    try { bindBaseEvents(); } catch (bindError) { console.warn('Falha ao preparar eventos básicos após erro de inicialização.', bindError); }
+    const diagnostic = reportSystemError('ERR-BOOT-001', error, { action: 'inicializacao_sistema' }, { notify: false });
+    console.error('Falha crítica ao iniciar sistema:', error);
+    if (els.loginScreen) {
+      els.loginScreen.classList.remove('hidden');
+      const card = els.loginScreen.querySelector('.login-card');
+      if (card) card.insertAdjacentHTML('afterbegin', `<div class="auth-alert"><strong>O sistema encontrou uma falha ao iniciar.</strong><span>Código: ${escapeHtml(diagnostic.occurrenceCode)}. Atualize a página. Se persistir, envie este código ao administrador.</span></div>`);
+    }
+  }
 }
 
 function bindBaseEvents() {
+  if (window.__sofolhasBaseEventsBound) return;
+  window.__sofolhasBaseEventsBound = true;
   els.loginForm.addEventListener('submit', handleLogin);
   els.publicDashboardBtn?.addEventListener('click', startPublicDashboardAccess);
   els.firstPasswordForm?.addEventListener('submit', handleFirstPasswordChange);
@@ -4283,13 +4317,17 @@ function bindBaseEvents() {
   els.sidebarClose?.addEventListener('click', () => {
     els.sidebar.classList.remove('open');
   });
+  bindAnalysisPeriodEvents();
+  bindGlobalDiagnostics();
+  window.addEventListener('online', () => showToast('Conexão restabelecida.', 'ok'));
+  window.addEventListener('offline', () => showToast('Sem conexão. O sistema preservará o que estiver em edição.', 'warn'));
   window.addEventListener('storage', (event) => {
     if (backendMode === 'local' && event.key === STORAGE_KEY) {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = safeStorageGet(localStorage, STORAGE_KEY, null);
       if (saved) {
         appState = ensureStateShape(JSON.parse(saved));
         invalidateUiCaches();
-        scheduleRender();
+        requestRemoteRender('sincronização local entre abas');
       }
     }
   });
@@ -4301,6 +4339,329 @@ function showToast(message, type = 'ok') {
   els.toast.classList.add('show');
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => els.toast.classList.remove('show'), 3000);
+}
+
+
+function safeStorageGet(storage, key, fallback = null) {
+  try {
+    const value = storage?.getItem?.(key);
+    return value === null ? fallback : value;
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function safeStorageSet(storage, key, value) {
+  try {
+    storage?.setItem?.(key, value);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function safeStorageRemove(storage, key) {
+  try { storage?.removeItem?.(key); } catch (error) {}
+}
+
+function getRuntimeEnvironment() {
+  const ua = String(navigator?.userAgent || '');
+  const platform = String(navigator?.platform || '');
+  const touchPoints = Number(navigator?.maxTouchPoints || 0);
+  const isIOS = /iPhone|iPad|iPod/i.test(ua) || (platform === 'MacIntel' && touchPoints > 1);
+  const isAndroid = /Android/i.test(ua);
+  const browser = /CriOS/i.test(ua) ? 'Chrome iOS'
+    : /FxiOS/i.test(ua) ? 'Firefox iOS'
+    : /EdgiOS/i.test(ua) ? 'Edge iOS'
+    : /Safari/i.test(ua) && !/Chrome|CriOS|Chromium|Edg/i.test(ua) ? 'Safari'
+    : /Edg/i.test(ua) ? 'Edge'
+    : /Chrome|CriOS/i.test(ua) ? 'Chrome'
+    : /Firefox|FxiOS/i.test(ua) ? 'Firefox'
+    : 'Outro';
+  return {
+    os: isIOS ? 'iOS/iPadOS' : isAndroid ? 'Android' : /Windows/i.test(ua) ? 'Windows' : /Macintosh|Mac OS X/i.test(ua) ? 'macOS' : 'Outro',
+    browser,
+    online: typeof navigator?.onLine === 'boolean' ? navigator.onLine : null,
+    viewport: `${window?.innerWidth || 0}x${window?.innerHeight || 0}`,
+    userAgent: ua.slice(0, 300),
+  };
+}
+
+function sanitizeDiagnosticContext(context = {}) {
+  const allowed = ['view','action','storeId','separatorId','routeId','mutationType','source','stage','detail'];
+  const clean = {};
+  allowed.forEach((key) => {
+    if (context[key] === undefined || context[key] === null) return;
+    clean[key] = String(context[key]).slice(0, 350);
+  });
+  return clean;
+}
+
+function getLocalDiagnostics() {
+  try {
+    const raw = safeStorageGet(localStorage, DIAGNOSTIC_LOCAL_KEY, '[]');
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function saveLocalDiagnostic(record) {
+  const items = getLocalDiagnostics();
+  items.unshift(record);
+  safeStorageSet(localStorage, DIAGNOSTIC_LOCAL_KEY, JSON.stringify(items.slice(0, 120)));
+}
+
+function reportSystemError(baseCode, error, context = {}, options = {}) {
+  const code = String(baseCode || 'ERR-UI-000').startsWith('ERR-') ? String(baseCode) : `ERR-${baseCode}`;
+  const occurredAt = nowIso();
+  const shortId = `${occurredAt.replace(/\D/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  const occurrenceCode = `${code}-${shortId}`;
+  const env = getRuntimeEnvironment();
+  const record = {
+    id: `diag_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    code,
+    occurrenceCode,
+    occurredAt,
+    appVersion: APP_VERSION,
+    userId: currentUser?.id || '',
+    userName: currentUser?.name || 'Não identificado',
+    userRole: currentUser?.role || '',
+    view: currentView || 'desconhecida',
+    backendMode,
+    message: String(error?.message || error || 'Erro sem mensagem').slice(0, 900),
+    stack: String(error?.stack || '').slice(0, 2200),
+    context: sanitizeDiagnosticContext(context),
+    environment: env,
+  };
+  saveLocalDiagnostic(record);
+  if (appState) {
+    appState.diagnostics = Array.isArray(appState.diagnostics) ? appState.diagnostics : [];
+    appState.diagnostics = [record, ...appState.diagnostics.filter((item) => item?.id !== record.id)].slice(0, 500);
+  }
+  if (backendMode === 'firebase' && firebaseRootRef && !diagnosticWriteInProgress) {
+    diagnosticWriteInProgress = true;
+    firebaseRootRef.child('diagnostics').child(record.id).set(sanitizeForFirebase(record))
+      .catch((firebaseError) => console.warn('Falha ao registrar diagnóstico remoto.', firebaseError))
+      .finally(() => { diagnosticWriteInProgress = false; });
+  }
+  console.error(`[${occurrenceCode}]`, error, record);
+  if (options.notify !== false) {
+    showToast(`Erro ${occurrenceCode}. O código foi registrado no Diagnóstico.`, 'error');
+  }
+  return record;
+}
+
+function bindGlobalDiagnostics() {
+  if (window.__sofolhasDiagnosticsBound) return;
+  window.__sofolhasDiagnosticsBound = true;
+  window.addEventListener('error', (event) => {
+    if (!event?.error && !event?.message) return;
+    reportSystemError('ERR-UI-001', event.error || new Error(event.message), { action: 'window.error', source: event.filename || '' }, { notify: false });
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event?.reason instanceof Error ? event.reason : new Error(String(event?.reason || 'Promise rejeitada sem tratamento'));
+    reportSystemError('ERR-UI-002', reason, { action: 'unhandledrejection' }, { notify: true });
+  });
+}
+
+function beginFormEditLock(key, meta = {}) {
+  activeFormEditLock = { key, meta: sanitizeDiagnosticContext(meta), startedAt: nowIso() };
+}
+
+function endFormEditLock({ renderPending = false } = {}) {
+  activeFormEditLock = null;
+  document.getElementById('sync-edit-notice')?.remove();
+  const shouldRender = pendingRemoteRender && renderPending;
+  pendingRemoteRender = false;
+  pendingRemoteRenderReason = '';
+  if (shouldRender) scheduleRender();
+}
+
+function showDeferredSyncNotice() {
+  if (document.getElementById('sync-edit-notice')) return;
+  const notice = document.createElement('div');
+  notice.id = 'sync-edit-notice';
+  notice.className = 'sync-edit-notice';
+  notice.textContent = 'Atualizações chegaram em segundo plano. Seu preenchimento foi preservado e será atualizado após salvar.';
+  document.body.appendChild(notice);
+}
+
+function requestRemoteRender(reason = 'sincronização') {
+  if (activeFormEditLock) {
+    pendingRemoteRender = true;
+    pendingRemoteRenderReason = reason;
+    showDeferredSyncNotice();
+    return;
+  }
+  scheduleRender();
+}
+
+function getAnalysisPeriod() {
+  const start = viewFilters.analysisStartDate || todayStr();
+  const end = viewFilters.analysisEndDate || start;
+  return start <= end ? { startDate: start, endDate: end, preset: viewFilters.analysisPreset || 'custom' } : { startDate: end, endDate: start, preset: 'custom' };
+}
+
+function getDateRangeYmd(startDate, endDate, maxDays = 400) {
+  const dates = [];
+  let cursor = startDate;
+  let guard = 0;
+  while (cursor && cursor <= endDate && guard < maxDays) {
+    dates.push(cursor);
+    cursor = addDaysToYmd(cursor, 1);
+    guard += 1;
+  }
+  return dates;
+}
+
+function isDateInAnalysisPeriod(dateStr, period = getAnalysisPeriod()) {
+  return !!dateStr && dateStr >= period.startDate && dateStr <= period.endDate;
+}
+
+function getAnalysisPeriodLabel(period = getAnalysisPeriod()) {
+  const today = todayStr();
+  if (period.startDate === today && period.endDate === today) return { kicker: 'Hoje', label: new Date(`${today}T12:00:00`).toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }) };
+  if (period.startDate === period.endDate) return { kicker: 'Data selecionada', label: formatDateBR(period.startDate) };
+  return { kicker: 'Período', label: `${formatDateBR(period.startDate)} a ${formatDateBR(period.endDate)}` };
+}
+
+function updateAnalysisPeriodTopbar() {
+  const period = getAnalysisPeriod();
+  const label = getAnalysisPeriodLabel(period);
+  if (els.periodKicker) els.periodKicker.textContent = label.kicker;
+  if (els.todayLabel) els.todayLabel.textContent = label.label;
+  if (els.periodCustomForm) {
+    if (els.periodCustomForm.startDate) els.periodCustomForm.startDate.value = period.startDate;
+    if (els.periodCustomForm.endDate) els.periodCustomForm.endDate.value = period.endDate;
+  }
+}
+
+function setAnalysisPeriodPreset(preset) {
+  const today = todayStr();
+  let start = today;
+  let end = today;
+  if (preset === 'yesterday') start = end = addDaysToYmd(today, -1);
+  if (preset === 'last7') start = addDaysToYmd(today, -6);
+  if (preset === 'month') start = `${today.slice(0, 8)}01`;
+  viewFilters.analysisPreset = preset;
+  viewFilters.analysisStartDate = start;
+  viewFilters.analysisEndDate = end;
+  viewFilters.divergenciaDate = '';
+  viewFilters.pendenciaDate = '';
+  updateAnalysisPeriodTopbar();
+  els.periodPopover?.classList.add('hidden');
+  els.periodToggle?.setAttribute('aria-expanded', 'false');
+  scheduleRender();
+}
+
+function bindAnalysisPeriodEvents() {
+  if (!els.periodToggle || window.__sofolhasPeriodBound) return;
+  window.__sofolhasPeriodBound = true;
+  els.periodToggle.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const willOpen = els.periodPopover?.classList.contains('hidden');
+    els.periodPopover?.classList.toggle('hidden');
+    els.periodToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    updateAnalysisPeriodTopbar();
+  });
+  els.periodClose?.addEventListener('click', () => {
+    els.periodPopover?.classList.add('hidden');
+    els.periodToggle?.setAttribute('aria-expanded', 'false');
+  });
+  document.querySelectorAll('.period-preset').forEach((button) => button.addEventListener('click', () => setAnalysisPeriodPreset(button.dataset.periodPreset || 'today')));
+  els.periodCustomForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const start = els.periodCustomForm.startDate?.value || todayStr();
+    const end = els.periodCustomForm.endDate?.value || start;
+    if (start > end) {
+      showToast('A data inicial não pode ser maior que a data final.', 'error');
+      return;
+    }
+    viewFilters.analysisPreset = 'custom';
+    viewFilters.analysisStartDate = start;
+    viewFilters.analysisEndDate = end;
+    viewFilters.divergenciaDate = '';
+    viewFilters.pendenciaDate = '';
+    updateAnalysisPeriodTopbar();
+    els.periodPopover?.classList.add('hidden');
+    els.periodToggle?.setAttribute('aria-expanded', 'false');
+    scheduleRender();
+  });
+  document.addEventListener('click', (event) => {
+    if (!els.periodPopover || els.periodPopover.classList.contains('hidden')) return;
+    if (event.target.closest('.period-control')) return;
+    els.periodPopover.classList.add('hidden');
+    els.periodToggle?.setAttribute('aria-expanded', 'false');
+  });
+  updateAnalysisPeriodTopbar();
+}
+
+
+function copyTextToClipboard(text) {
+  const value = String(text || '');
+  if (!value) return;
+  if (navigator?.clipboard?.writeText) {
+    navigator.clipboard.writeText(value).then(() => showToast('Código copiado.')).catch(() => fallbackCopyText(value));
+    return;
+  }
+  fallbackCopyText(value);
+}
+
+function fallbackCopyText(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  try { document.execCommand('copy'); showToast('Código copiado.'); }
+  catch (error) { showToast('Não foi possível copiar automaticamente. Selecione o código manualmente.', 'warn'); }
+  area.remove();
+}
+
+function readFileAsArrayBufferCompat(file) {
+  if (file?.arrayBuffer) return file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Falha ao ler o arquivo no navegador.'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function writeWorkbookCompat(workbook, fileName, options = {}) {
+  try {
+    window.XLSX.writeFile(workbook, fileName, options);
+    return true;
+  } catch (firstError) {
+    try {
+      const array = window.XLSX.write(workbook, { bookType: 'xlsx', type: 'array', compression: options.compression !== false });
+      const blob = new Blob([array], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = fileName;
+      anchor.rel = 'noopener';
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2500);
+      return true;
+    } catch (fallbackError) {
+      reportSystemError('ERR-IOS-003', fallbackError, { action: 'download_excel', detail: firstError?.message || '' }, { notify: false });
+      throw fallbackError;
+    }
+  }
+}
+
+function ymdFromIsoInSaoPaulo(iso) {
+  if (!iso) return '';
+  try { return ymdFromParts(getSaoPauloDateParts(new Date(iso))); }
+  catch (error) { return String(iso).slice(0, 10); }
 }
 
 function getSaoPauloDateParts(date = new Date()) {
@@ -6031,6 +6392,8 @@ function ensureStateShape(state) {
   base.operationalSpreadsheetRecords = Array.isArray(base.operationalSpreadsheetRecords) ? base.operationalSpreadsheetRecords : [];
   base.spreadsheetConflicts = Array.isArray(base.spreadsheetConflicts) ? base.spreadsheetConflicts : [];
   base.separators = Array.isArray(base.separators) ? base.separators : [];
+  base.diagnostics = Array.isArray(base.diagnostics) ? base.diagnostics : Object.values(base.diagnostics || {});
+  base.diagnostics = base.diagnostics.filter(Boolean).sort((a, b) => String(b.occurredAt || '').localeCompare(String(a.occurredAt || ''))).slice(0, 500);
 
   base.movements.outbounds = base.movements.outbounds.map((item) => ({
     ...item,
@@ -6325,6 +6688,7 @@ function createSeedState() {
     separators: [],
     divergences: [],
     audit: [],
+    diagnostics: [],
     dayClosings: [],
     mandatoryInventories: [],
     settings: {
@@ -6338,17 +6702,17 @@ function createSeedState() {
 
 async function loadState() {
   if (!APP_CONFIG.USE_FIREBASE) {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = safeStorageGet(localStorage, STORAGE_KEY, null);
     if (saved) {
       try {
         return ensureStateShape(JSON.parse(saved));
       } catch (error) {
         console.warn('Base local inválida. Recriando estado inicial.', error);
-        localStorage.removeItem(STORAGE_KEY);
+        safeStorageRemove(localStorage, STORAGE_KEY);
       }
     }
     const seed = createSeedState();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
+    safeStorageSet(localStorage, STORAGE_KEY, JSON.stringify(seed));
     return seed;
   }
 
@@ -6375,7 +6739,7 @@ function readSavedSession() {
   ];
 
   for (const candidate of candidates) {
-    const raw = candidate.storage.getItem(candidate.key);
+    const raw = safeStorageGet(candidate.storage, candidate.key, null);
     if (!raw) continue;
     try {
       const data = JSON.parse(raw);
@@ -6383,16 +6747,16 @@ function readSavedSession() {
     } catch (error) {
       console.warn('Sessão salva inválida. Removendo registro.', error);
     }
-    candidate.storage.removeItem(candidate.key);
+    safeStorageRemove(candidate.storage, candidate.key);
   }
   return null;
 }
 
 function clearSavedSessions() {
-  localStorage.removeItem(PERSISTENT_SESSION_KEY);
-  localStorage.removeItem(SESSION_KEY);
-  sessionStorage.removeItem(SESSION_KEY);
-  sessionStorage.removeItem(PERSISTENT_SESSION_KEY);
+  safeStorageRemove(localStorage, PERSISTENT_SESSION_KEY);
+  safeStorageRemove(localStorage, SESSION_KEY);
+  safeStorageRemove(sessionStorage, SESSION_KEY);
+  safeStorageRemove(sessionStorage, PERSISTENT_SESSION_KEY);
   pendingSessionUserId = null;
   pendingSessionStorageMode = null;
 }
@@ -6401,10 +6765,10 @@ function saveAuthenticatedSession(userId, rememberOnDevice) {
   clearSavedSessions();
   const payload = JSON.stringify({ userId });
   if (rememberOnDevice) {
-    localStorage.setItem(PERSISTENT_SESSION_KEY, payload);
+    safeStorageSet(localStorage, PERSISTENT_SESSION_KEY, payload);
     pendingSessionStorageMode = 'local';
   } else {
-    sessionStorage.setItem(SESSION_KEY, payload);
+    safeStorageSet(sessionStorage, SESSION_KEY, payload);
     pendingSessionStorageMode = 'session';
   }
 }
@@ -6421,13 +6785,19 @@ function applyAuthenticatedUser(user, { fromSavedSession = false } = {}) {
     currentUser = null;
     return false;
   }
+  const previousView = currentView;
+  const hadAuthenticatedUser = !!currentUser;
   currentUser = user;
   passwordChangeUser = null;
-  currentView = getFirstAllowedView(currentUser);
+  if (!hadAuthenticatedUser || !canAccessView(previousView, currentUser)) {
+    currentView = getFirstAllowedView(currentUser);
+  } else {
+    currentView = previousView;
+  }
   return true;
 }
 
-function reconcileAuthenticatedUser({ clearMissingSavedSession = false } = {}) {
+function reconcileAuthenticatedUser({ clearMissingSavedSession = false, suppressRender = false } = {}) {
   const savedUserId = currentUser?.id || pendingSessionUserId;
   if (!savedUserId) return;
   const updatedUser = findUserById(savedUserId);
@@ -6435,7 +6805,7 @@ function reconcileAuthenticatedUser({ clearMissingSavedSession = false } = {}) {
     const restored = applyAuthenticatedUser(updatedUser, { fromSavedSession: !!pendingSessionUserId });
     if (restored) {
       pendingSessionUserId = null;
-      scheduleRender();
+      if (!suppressRender) scheduleRender();
     }
     return;
   }
@@ -6443,7 +6813,7 @@ function reconcileAuthenticatedUser({ clearMissingSavedSession = false } = {}) {
     clearSavedSessions();
     currentUser = null;
     passwordChangeUser = null;
-    scheduleRender();
+    if (!suppressRender) scheduleRender();
   }
 }
 
@@ -6498,14 +6868,16 @@ function startFirebaseSync() {
       appState = ensureStateShape(snapshot.val());
       firebaseUsersLoaded = true;
       invalidateUiCaches();
-      reconcileAuthenticatedUser({ clearMissingSavedSession: true });
-      scheduleRender();
+      reconcileAuthenticatedUser({ clearMissingSavedSession: true, suppressRender: true });
+      requestRemoteRender('Firebase em tempo real');
     }, (error) => {
       console.error('Falha na sincronização em tempo real do Firebase.', error);
+      reportSystemError('ERR-FB-001', error, { action: 'sincronizacao_tempo_real' }, { notify: !!currentUser });
       if (!currentUser) showToast(firebaseErrorMessage(error), 'error');
     });
   } catch (error) {
     console.error('Falha ao iniciar Firebase, usando modo local.', error);
+    reportSystemError('ERR-FB-003', error, { action: 'inicializacao_firebase' }, { notify: false });
     backendMode = 'local';
     firebaseUsersLoaded = true;
     firebaseUsersReadyPromise = Promise.resolve(false);
@@ -6522,7 +6894,7 @@ async function waitForFirebaseUsers(timeoutMs = 5000) {
 }
 
 function saveLocalState(state) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  safeStorageSet(localStorage, STORAGE_KEY, JSON.stringify(state));
 }
 
 async function persistMutation(mutationType, payload, successMessage, actorOverride = null, options = {}) {
@@ -6548,7 +6920,8 @@ async function persistMutation(mutationType, payload, successMessage, actorOverr
       appState = ensureStateShape(result.snapshot.val());
     } catch (error) {
       console.error('Erro ao salvar no Firebase:', error);
-      const message = firebaseErrorMessage(error);
+      reportSystemError('ERR-FB-002', error, { action: 'persistMutation', mutationType }, { notify: false });
+      const message = `${firebaseErrorMessage(error)} Código: ERR-FB-002`;
       showToast(message, 'error');
       return { ok: false, error: message };
     }
@@ -6559,7 +6932,14 @@ async function persistMutation(mutationType, payload, successMessage, actorOverr
 
   invalidateUiCaches();
   showToast(successMessage || 'Ação salva com sucesso.');
-  if (!options.skipRender) render();
+  if (!options.skipRender) {
+    if (activeFormEditLock) {
+      pendingRemoteRender = true;
+      pendingRemoteRenderReason = 'salvamento';
+    } else {
+      render();
+    }
+  }
   return { ok: true };
 }
 
@@ -9286,7 +9666,7 @@ function render() {
     els.loginScreen.classList.add('hidden');
     els.appShell.classList.remove('hidden');
     document.body.classList.toggle('public-dashboard-mode', !!publicDashboardMode);
-    els.todayLabel.textContent = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+    updateAnalysisPeriodTopbar();
     els.sidebarUserName.textContent = publicDashboardMode ? 'Dashboard Público' : currentUser.name;
     els.sidebarUserRole.textContent = publicDashboardMode ? 'Somente leitura' : ROLE_LABELS[currentUser.role];
     els.topbarUserName.textContent = publicDashboardMode ? 'Dashboard Público' : currentUser.name;
@@ -9308,21 +9688,25 @@ function render() {
   } catch (error) {
     lastRenderError = error;
     console.error('Erro ao renderizar a tela:', error);
+    const diagnostic = reportSystemError(currentView === 'separadores' ? 'ERR-SEP-001' : 'ERR-UI-003', error, { action: 'render', view: currentView }, { notify: false });
     if (els.mainContent) {
       els.mainContent.innerHTML = `
-        <div class="card">
+        <div class="card stack">
           <h3>Não foi possível abrir esta área</h3>
-          <p class="muted">O sistema encontrou um erro nesta tela, mas a navegação continua funcionando. Atualize a página ou tente abrir outra aba.</p>
+          <p class="muted">O sistema protegeu a navegação e registrou o ponto da falha.</p>
+          <div><span class="diagnostic-code">${escapeHtml(diagnostic.occurrenceCode)}</span></div>
           <div class="form-actions">
             <button type="button" class="btn btn-secondary" id="btn-render-dashboard">Voltar para o Dashboard</button>
             <button type="button" class="btn btn-ghost" id="btn-render-retry">Tentar novamente</button>
+            <button type="button" class="btn btn-ghost" id="btn-copy-render-error">Copiar código</button>
           </div>
         </div>
       `;
       document.getElementById('btn-render-dashboard')?.addEventListener('click', () => navigateToView('dashboard'));
       document.getElementById('btn-render-retry')?.addEventListener('click', () => scheduleRender());
+      document.getElementById('btn-copy-render-error')?.addEventListener('click', () => copyTextToClipboard(diagnostic.occurrenceCode));
     }
-    showToast('Erro ao abrir a área. A navegação foi protegida para não travar o sistema.', 'error');
+    showToast(`Erro ${diagnostic.occurrenceCode}. A navegação foi protegida.`, 'error');
   } finally {
     renderInProgress = false;
     if (renderAgainAfterFinish) {
@@ -9462,6 +9846,7 @@ function renderCurrentView() {
     exportacaoMassa: renderExportacaoMassa,
     planilhasOperacionais: renderPlanilhasOperacionais,
     usuarios: renderUsuarios,
+    diagnosticos: renderDiagnosticos,
     configuracoes: renderConfiguracoes,
   };
 
@@ -9477,7 +9862,8 @@ function renderCurrentView() {
     bindViewEvents();
   } catch (error) {
     console.error('Erro ao vincular eventos da tela:', error);
-    showToast('A área abriu, mas alguns botões podem precisar atualizar a página. Envie o erro do console se persistir.', 'warn');
+    const diagnostic = reportSystemError(currentView === 'separadores' ? 'ERR-SEP-003' : 'ERR-UI-004', error, { action: 'bindViewEvents', view: currentView }, { notify: false });
+    showToast(`A área abriu, mas houve falha em um controle. Código: ${diagnostic.occurrenceCode}`, 'warn');
   }
 }
 
@@ -9967,12 +10353,12 @@ function renderDashboardOperationSummary(summary) {
     <div class="stack">
       <div class="section-header">
         <div>
-          <h3>Resumo da operação de hoje</h3>
+          <h3>Resumo da operação em ${formatDateBR(summary.date)}</h3>
           <p>Data operacional: ${formatDateBR(summary.date)}. Após 22h, o sistema já considera a entrega do dia seguinte.</p>
         </div>
       </div>
       <div class="cards-grid">
-        ${renderMetricCard('Lojas previstas hoje', summary.expectedStores, '📌', summary.expectedStores ? 'success' : 'warning', summary.expectedSource === 'planilha' ? `Base importada (${summary.importedPlanCount} planilha(s) ativa(s))` : 'Conforme agenda de entrega por rede/loja')}
+        ${renderMetricCard('Lojas previstas na data', summary.expectedStores, '📌', summary.expectedStores ? 'success' : 'warning', summary.expectedSource === 'planilha' ? `Base importada (${summary.importedPlanCount} planilha(s) ativa(s))` : 'Conforme agenda de entrega por rede/loja')}
         ${renderMetricCard('Lançadas pelo CD', summary.cdStores, '🏭', summary.cdStores >= summary.expectedStores && summary.expectedStores ? 'success' : 'warning', percent(summary.cdStores))}
         ${renderMetricCard('Validadas pelo motorista', summary.driverStores, '🚚', summary.driverStores >= summary.cdStores && summary.cdStores ? 'success' : 'warning', 'Total de lojas com entrega confirmada')}
         ${renderMetricCard('Confirmadas pelo promotor', summary.promoterStores, '🏬', summary.promoterStores >= summary.driverStores && summary.driverStores ? 'success' : 'warning', 'Total de lojas com recebimento confirmado')}
@@ -10001,15 +10387,14 @@ function renderDashboardOperationSummary(summary) {
   `;
 }
 
-function getTodayMetrics(state = appState, user = currentUser) {
-  const today = todayStr();
+function getMetricsForDate(date = todayStr(), state = appState, user = currentUser) {
   const scopeUser = user?.role === 'promoter' ? { role: 'viewer' } : user;
   const inScope = (item) => isMovementVisibleToUser(item, scopeUser, state);
-  const outbounds = state.movements.outbounds.filter((item) => isActiveMovement(item) && item.date === today && item.status !== 'historico' && inScope(item));
-  const receipts = state.movements.receipts.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
-  const pickupsToday = state.movements.pickups.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
-  const returnsToday = state.movements.returns.filter((item) => isActiveMovement(item) && item.date === today && inScope(item));
-  const excelToday = getOperationalSpreadsheetRecordsForDate(today, state);
+  const outbounds = state.movements.outbounds.filter((item) => isActiveMovement(item) && item.date === date && item.status !== 'historico' && inScope(item));
+  const receipts = state.movements.receipts.filter((item) => isActiveMovement(item) && item.date === date && inScope(item));
+  const pickupsToday = state.movements.pickups.filter((item) => isActiveMovement(item) && item.date === date && inScope(item));
+  const returnsToday = state.movements.returns.filter((item) => isActiveMovement(item) && item.date === date && inScope(item));
+  const excelToday = getOperationalSpreadsheetRecordsForDate(date, state).filter((item) => !item.storeId || canUserSeeStore(item.storeId, scopeUser, date, state));
   const excelSentRows = excelToday.filter((item) => item.importType === 'cd_outbound');
   const excelReceiptRows = excelToday.filter((item) => (item.importType === 'receipt_df' || item.importType === 'receipt_go') && isPromoterValidationNetwork(getStoreById(item.storeId, state)));
   const excelDriverRows = excelToday.filter((item) => item.importType === 'driver_ops');
@@ -10021,16 +10406,33 @@ function getTodayMetrics(state = appState, user = currentUser) {
     : receipts.reduce((acc, item) => acc + sumQty(item.qty), 0);
   const pickups = excelDriverRows.length ? excelDriverRows.reduce((acc, item) => acc + safeInt(item.pickedUp), 0) : pickupsToday.reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
   const returns = returnsToday.reduce((acc, item) => acc + sumQty(item.qty), 0);
+  return { sent, confirmed, pickups, returns };
+}
+
+function getPeriodMetrics(period = getAnalysisPeriod(), state = appState, user = currentUser) {
+  const dates = getDateRangeYmd(period.startDate, period.endDate);
+  const movementTotals = dates.reduce((acc, date) => {
+    const day = getMetricsForDate(date, state, user);
+    acc.sent += day.sent;
+    acc.confirmed += day.confirmed;
+    acc.pickups += day.pickups;
+    acc.returns += day.returns;
+    return acc;
+  }, { sent: 0, confirmed: 0, pickups: 0, returns: 0 });
   const companyTotals = getCompanyBoxTotals(state);
   const company = user?.role === 'driver' ? 0 : (user?.role === 'promoter' ? companyTotals.total : sumQty(state.cdStock));
-  const visibleStores = getVisibleStores(state, user, today);
-  const stores = user?.role === 'promoter'
-    ? visibleStores.reduce((acc, store) => acc + sumQty(getStoreStock(store.id, state)), 0)
-    : visibleStores.reduce((acc, store) => acc + sumQty(getStoreStock(store.id, state)), 0);
+  const visibleStores = getVisibleStores(state, user, period.endDate);
+  const stores = visibleStores.reduce((acc, store) => acc + sumQty(getStoreStock(store.id, state)), 0);
+  const scopeUser = user?.role === 'promoter' ? { role: 'viewer' } : user;
+  const inScope = (item) => isMovementVisibleToUser(item, scopeUser, state);
   const inReturn = user?.role === 'promoter'
     ? companyTotals.inReturn
     : state.movements.pickups.filter((item) => isActiveMovement(item) && !item.returnBatchId && inScope(item)).reduce((acc, item) => acc + (item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty)), 0);
-  return { sent, confirmed, pickups, returns, company, stores, inReturn };
+  return { ...movementTotals, company, stores, inReturn };
+}
+
+function getTodayMetrics(state = appState, user = currentUser) {
+  return getPeriodMetrics({ startDate: todayStr(), endDate: todayStr(), preset: 'today' }, state, user);
 }
 
 function getForecast(state = appState, date = todayStr()) {
@@ -11260,195 +11662,92 @@ function getDashboardRouteSummary(routes, user, state = appState, date = todaySt
   });
 }
 
+function getDashboardRouteSummaryForPeriod(routes, user, state = appState, period = getAnalysisPeriod()) {
+  const routeIds = new Set(routes.map((route) => route.id));
+  const totalsByRoute = new Map(routes.map((route) => [route.id, { sent: 0, pickup: 0, returned: 0 }]));
+  const addMovement = (items, field, valueGetter, extraFilter = null) => {
+    (items || []).forEach((item) => {
+      if (!isDateInAnalysisPeriod(item.date, period) || !routeIds.has(item.routeId)) return;
+      if (extraFilter && !extraFilter(item)) return;
+      if (!isMovementVisibleToUser(item, user, state)) return;
+      totalsByRoute.get(item.routeId)[field] += valueGetter(item);
+    });
+  };
+  addMovement(state.movements.outbounds, 'sent', (item) => sumQty(item.qty), (item) => item.status !== 'historico');
+  addMovement(state.movements.pickups, 'pickup', (item) => item.totalOnly ? safeInt(item.totalQty) : sumQty(item.qty));
+  addMovement(state.movements.returns, 'returned', (item) => sumQty(item.qty));
+  return routes.map((route) => {
+    const totals = totalsByRoute.get(route.id) || { sent: 0, pickup: 0, returned: 0 };
+    return { route, sent: totals.sent, pickup: totals.pickup, returned: totals.returned, diff: totals.pickup - totals.returned };
+  });
+}
+
+function getAuditItemsForPeriod(period = getAnalysisPeriod(), user = currentUser, state = appState) {
+  return (state.audit || []).filter((item) => {
+    const date = ymdFromIsoInSaoPaulo(item.createdAt);
+    if (!isDateInAnalysisPeriod(date, period)) return false;
+    return canSeeGlobalData(user) || user.role === 'cd' || item.userId === user.id || item.userName === user.name;
+  });
+}
+
 function renderDashboard() {
-  const metrics = getTodayMetrics();
-  const forecast = getForecast();
+  const period = getAnalysisPeriod();
+  const isTodayOnly = period.startDate === todayStr() && period.endDate === todayStr();
+  const periodLabel = getAnalysisPeriodLabel(period).label;
+  const metrics = getPeriodMetrics(period);
+  const forecast = getForecast(appState, period.endDate);
   const alerts = getAllAlerts().slice(0, 4);
-  const visibleDivergences = getVisibleDivergences(appState, currentUser);
+  const visibleDivergences = getVisibleDivergences(appState, currentUser).filter((item) => isDateInAnalysisPeriod(item.date || ymdFromIsoInSaoPaulo(item.createdAt), period));
   const openDivergences = visibleDivergences.filter((item) => item.status === 'aberta').length;
   const promoterCompanyDashboard = currentUser?.role === 'promoter';
   const stockRowsUser = promoterCompanyDashboard ? { role: 'viewer' } : currentUser;
-  const stockRows = getStoreStockRows(appState, stockRowsUser).slice(0, 5);
+  const stockRows = getStoreStockRows(appState, stockRowsUser, period.endDate).slice(0, 5);
   const routesForDashboard = canSeeGlobalData(currentUser) || currentUser.role === 'cd' || promoterCompanyDashboard ? appState.routes : getVisibleRoutes(appState, currentUser);
   const showCdForecast = ['admin', 'viewer', 'cd'].includes(currentUser?.role);
-  const visibleStoreQty = getVisibleStores(appState, currentUser).reduce((acc, store) => addQty(acc, getStoreStock(store.id)), emptyQty());
+  const visibleStoreQty = getVisibleStores(appState, currentUser, period.endDate).reduce((acc, store) => addQty(acc, getStoreStock(store.id)), emptyQty());
   const companyBoxTotals = getCompanyBoxTotals(appState);
   const dashboardMovementUser = promoterCompanyDashboard ? { role: 'viewer' } : currentUser;
-  const operationSummary = getDashboardStoreProcessSummary(appState, dashboardMovementUser, todayStr());
+  const operationSummary = getDashboardStoreProcessSummary(appState, dashboardMovementUser, period.endDate);
   const dashboardStockTotal = promoterCompanyDashboard ? companyBoxTotals.total : (showCdForecast ? sumQty(getCdStock(appState)) : sumQty(visibleStoreQty));
-  const routeSummary = getDashboardRouteSummary(routesForDashboard, dashboardMovementUser, appState, todayStr());
+  const routeSummary = getDashboardRouteSummaryForPeriod(routesForDashboard, dashboardMovementUser, appState, period);
+  const auditItems = getAuditItemsForPeriod(period, currentUser, appState).slice(0, 6);
+  const movementWord = isTodayOnly ? 'Hoje' : 'no período';
 
   return `
     <div class="stack">
-      ${renderMandatoryInventoryNotice(todayStr())}
-      ${renderOperationalSpreadsheetDashboardSummary(todayStr())}
-      ${showCdForecast ? (metrics.company < forecast.predicted ? `
-        <div class="alert-strip critical">
-          <div>
-            <strong>ALERTA DE ESTOQUE CRÍTICO</strong>
-            <div class="muted">${weekdayName(forecast.weekday)} costuma exigir ${forecast.predicted} caixas. O CD está com ${metrics.company}.</div>
-          </div>
-          <div class="badge-count">${forecast.predicted - metrics.company}</div>
-        </div>
+      <div class="card period-summary-note"><span>📅</span><span>Dados de movimentação: <strong>${escapeHtml(periodLabel)}</strong></span><span>•</span><span>Estoque exibido abaixo é <strong>saldo atual</strong>, não soma do período.</span></div>
+      ${isTodayOnly ? renderMandatoryInventoryNotice(todayStr()) : ''}
+      ${renderOperationalSpreadsheetDashboardSummary(period.startDate, period.endDate)}
+      ${showCdForecast && isTodayOnly ? (metrics.company < forecast.predicted ? `
+        <div class="alert-strip critical"><div><strong>ALERTA DE ESTOQUE CRÍTICO</strong><div class="muted">${weekdayName(forecast.weekday)} costuma exigir ${forecast.predicted} caixas. O CD está com ${metrics.company}.</div></div><div class="badge-count">${forecast.predicted - metrics.company}</div></div>
       ` : `
-        <div class="alert-strip info">
-          <div>
-            <strong>Base prevista para hoje</strong>
-            <div class="muted">${weekdayName(forecast.weekday)}: ${forecast.predicted} caixas (${forecast.source}). Estoque atual no CD: ${metrics.company}.</div>
-          </div>
-          ${statusTag(metrics.company < forecast.predicted + appState.settings.safetyMargin ? 'warn' : 'ok')}
-        </div>
-      `) : (promoterCompanyDashboard ? `
-        <div class="alert-strip info">
-          <div>
-            <strong>Visão geral de caixas da empresa</strong>
-            <div class="muted">Total considerando CD, lojas e caixas em retorno: ${companyBoxTotals.total} caixas.</div>
-          </div>
-          ${statusTag(companyBoxTotals.total > 0 ? 'ok' : 'warn')}
-        </div>
-      ` : `
-        <div class="alert-strip info">
-          <div>
-            <strong>Visão do seu acesso</strong>
-            <div class="muted">Esta tela mostra somente as informações vinculadas ao seu usuário.</div>
-          </div>
-        </div>
-      `)}
+        <div class="alert-strip info"><div><strong>Base prevista para hoje</strong><div class="muted">${weekdayName(forecast.weekday)}: ${forecast.predicted} caixas (${forecast.source}). Estoque atual no CD: ${metrics.company}.</div></div>${statusTag(metrics.company < forecast.predicted + appState.settings.safetyMargin ? 'warn' : 'ok')}</div>
+      `) : ''}
 
-      ${renderDashboardOperationSummary(operationSummary)}
+      ${period.startDate === period.endDate ? renderDashboardOperationSummary(operationSummary) : `<div class="helper-card compact small">O funil operacional abaixo usa o último dia do período (${formatDateBR(period.endDate)}). Os cartões e o resumo por rota somam todo o período.</div>${renderDashboardOperationSummary(operationSummary)}`}
 
       <div class="cards-grid">
-        ${showCdForecast ? renderMetricCard('Caixas no CD', metrics.company, '🏭', metrics.company < forecast.predicted ? 'critical' : 'success', 'Saldo atual confirmado no CD') : ''}
-        ${promoterCompanyDashboard ? renderMetricCard('Caixas Totais da Empresa', companyBoxTotals.total, '🏭', companyBoxTotals.total ? 'success' : 'warning', 'CD + lojas + caixas em retorno') : ''}
-        ${renderMetricCard('Enviadas Hoje', metrics.sent, '🚚', 'success', 'Saídas lançadas pelo CD')}
-        ${renderMetricCard('Confirmadas nas Lojas', metrics.confirmed, '🏬', 'success', 'Recebimentos confirmados pelos promotores')}
-        ${renderMetricCard(currentUser.role === 'promoter' ? 'Estoque da Minha Loja' : 'Estoque Visível', metrics.stores, '📦', 'warning', currentUser.role === 'promoter' ? 'Saldo atual da loja vinculada ao promotor' : 'Saldo dentro da permissão do usuário')}
-        ${promoterCompanyDashboard ? renderMetricCard('Estoque em Lojas da Empresa', companyBoxTotals.stores, '🏬', 'warning', 'Total acumulado em todas as lojas') : ''}
-        ${renderMetricCard('Em Retorno', metrics.inReturn, '🔄', 'warning', promoterCompanyDashboard ? 'Total de caixas da empresa em retorno' : 'Caixas recolhidas ainda não recebidas no CD')}
-        ${renderMetricCard('Recebidas Hoje', metrics.returns, '✅', 'success', 'Caixas que retornaram ao CD')}
-        ${renderMetricCard('Divergências Abertas', openDivergences, '⚠️', openDivergences ? 'critical' : 'success', 'Erros identificados automaticamente')}
-        ${showCdForecast ? renderMetricCard('Base do Dia', forecast.predicted, '📊', 'success', `${forecast.source} de necessidade para ${weekdayName(forecast.weekday)}`) : ''}
+        ${showCdForecast ? renderMetricCard('Caixas no CD', metrics.company, '🏭', metrics.company < forecast.predicted && isTodayOnly ? 'critical' : 'success', 'Saldo atual confirmado no CD') : ''}
+        ${promoterCompanyDashboard ? renderMetricCard('Caixas Totais da Empresa', companyBoxTotals.total, '🏭', companyBoxTotals.total ? 'success' : 'warning', 'Saldo atual: CD + lojas + caixas em retorno') : ''}
+        ${renderMetricCard(`Enviadas ${movementWord}`, metrics.sent, '🚚', 'success', `Total entre ${formatDateBR(period.startDate)} e ${formatDateBR(period.endDate)}`)}
+        ${renderMetricCard(`Confirmadas ${movementWord}`, metrics.confirmed, '🏬', 'success', 'Excel oficial quando houver importação; senão, registros do sistema')}
+        ${renderMetricCard(currentUser.role === 'promoter' ? 'Estoque atual da Minha Loja' : 'Estoque atual Visível', metrics.stores, '📦', 'warning', 'Saldo atual, independente do período selecionado')}
+        ${promoterCompanyDashboard ? renderMetricCard('Estoque atual em Lojas', companyBoxTotals.stores, '🏬', 'warning', 'Total atual acumulado em todas as lojas') : ''}
+        ${renderMetricCard('Em Retorno agora', metrics.inReturn, '🔄', 'warning', 'Saldo atual de caixas recolhidas ainda não recebidas no CD')}
+        ${renderMetricCard(`Retornadas ao CD ${movementWord}`, metrics.returns, '✅', 'success', 'Total de retornos no período selecionado')}
+        ${renderMetricCard('Divergências no período', openDivergences, '⚠️', openDivergences ? 'critical' : 'success', 'Divergências abertas dentro do período selecionado')}
+        ${showCdForecast && isTodayOnly ? renderMetricCard('Base do Dia', forecast.predicted, '📊', 'success', `${forecast.source} de necessidade para ${weekdayName(forecast.weekday)}`) : ''}
       </div>
 
       <div class="grid-3">
-        <div class="card">
-          <div class="section-header">
-            <div>
-              <h3>${promoterCompanyDashboard ? 'Caixas Totais da Empresa' : (showCdForecast ? 'Estoque de Caixas no CD' : 'Estoque de Caixas Visível')}</h3>
-              <p>${promoterCompanyDashboard ? 'Total de caixas da empresa considerando CD, lojas e caixas em retorno.' : (showCdForecast ? 'Saldo geral disponível no Centro de Distribuição, sem separação por setor.' : 'Saldo total de caixas dentro da permissão do seu acesso.')}</p>
-            </div>
-          </div>
-          <div class="list">
-            <div class="kpi-line">
-              <div class="kpi-row"><span>Total de caixas</span><strong>${dashboardStockTotal}</strong></div>
-              <div class="bar"><span style="width:${dashboardStockTotal > 0 ? 100 : 0}%"></span></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="section-header">
-            <div>
-              <h3>Estoque em Loja (Top 5)</h3>
-              <p>${promoterCompanyDashboard ? 'Lojas da empresa com mais caixas acumuladas.' : 'Lojas com mais caixas acumuladas.'}</p>
-            </div>
-          </div>
-          <div class="list">
-            ${stockRows.map((row) => `
-              <div class="list-item">
-                <div class="list-item-head">
-                  <strong>${row.store.name}</strong>
-                  ${row.isHigh ? statusTag('danger') : statusTag('ok')}
-                </div>
-                <div class="muted">Rota atual: ${getRouteById(row.routeId)?.name || '-'}</div>
-                <div class="kpi-row"><span>Total em loja</span><strong>${row.total}</strong></div>
-                <div class="bar"><span style="width:${Math.min(100, (row.total / Math.max(1, row.store.highStockLimit)) * 100)}%"></span></div>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="section-header">
-            <div>
-              <h3>Alertas e Divergências</h3>
-              <p>Pontos de atenção para agir rápido.</p>
-            </div>
-          </div>
-          ${alerts.length ? `
-            <div class="list">
-              ${alerts.map((alert) => `
-                <div class="list-item">
-                  <div class="list-item-head">
-                    <strong>${alert.title}</strong>
-                    ${statusTag(alert.priority === 'critical' ? 'danger' : 'warn')}
-                  </div>
-                  <p>${alert.description}</p>
-                  <small class="muted">${alert.detail}</small>
-                </div>
-              `).join('')}
-            </div>
-          ` : `<div class="empty">Sem alertas no momento.</div>`}
-        </div>
+        <div class="card"><div class="section-header"><div><h3>${promoterCompanyDashboard ? 'Caixas Totais da Empresa' : (showCdForecast ? 'Estoque Atual no CD' : 'Estoque Atual Visível')}</h3><p>Este indicador é um saldo atual e não é somado pelo período.</p></div></div><div class="list"><div class="kpi-line"><div class="kpi-row"><span>Total de caixas</span><strong>${dashboardStockTotal}</strong></div><div class="bar"><span style="width:${dashboardStockTotal > 0 ? 100 : 0}%"></span></div></div></div></div>
+        <div class="card"><div class="section-header"><div><h3>Estoque Atual em Loja (Top 5)</h3><p>Lojas com mais caixas acumuladas neste momento.</p></div></div><div class="list">${stockRows.map((row) => `<div class="list-item"><div class="list-item-head"><strong>${row.store.name}</strong>${row.isHigh ? statusTag('danger') : statusTag('ok')}</div><div class="muted">Rota atual: ${getRouteById(row.routeId)?.name || '-'}</div><div class="kpi-row"><span>Total em loja</span><strong>${row.total}</strong></div><div class="bar"><span style="width:${Math.min(100, (row.total / Math.max(1, row.store.highStockLimit)) * 100)}%"></span></div></div>`).join('')}</div></div>
+        <div class="card"><div class="section-header"><div><h3>Alertas Atuais</h3><p>Pontos de atenção do estado atual da operação.</p></div></div>${alerts.length ? `<div class="list">${alerts.map((alert) => `<div class="list-item"><div class="list-item-head"><strong>${alert.title}</strong>${statusTag(alert.priority === 'critical' ? 'danger' : 'warn')}</div><p>${alert.description}</p><small class="muted">${alert.detail}</small></div>`).join('')}</div>` : `<div class="empty">Sem alertas no momento.</div>`}</div>
       </div>
 
       <div class="grid-2">
-        <div class="card">
-          <div class="section-header">
-            <div>
-              <h3>Resumo por Rota</h3>
-              <p>Comparação entre enviado, recolhido e retornado no dia.</p>
-            </div>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Rota</th>
-                  <th>Motorista</th>
-                  <th>Enviadas</th>
-                  <th>Recolhidas</th>
-                  <th>Recebidas no CD</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${routeSummary.map((item) => `
-                  <tr>
-                    <td>${item.route.name}</td>
-                    <td>${getUserById(item.route.driverId)?.name || '-'}</td>
-                    <td>${item.sent}</td>
-                    <td>${item.pickup}</td>
-                    <td>${item.returned}</td>
-                    <td>${item.diff > 0 ? statusTag('warn') : statusTag('ok')}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="section-header">
-            <div>
-              <h3>Últimas Ações</h3>
-            </div>
-          </div>
-          ${appState.audit.filter((item) => canSeeGlobalData(currentUser) || currentUser.role === 'cd' || item.userId === currentUser.id || item.userName === currentUser.name).length ? `
-            <div class="list">
-              ${appState.audit.filter((item) => canSeeGlobalData(currentUser) || currentUser.role === 'cd' || item.userId === currentUser.id || item.userName === currentUser.name).slice(0, 6).map((item) => `
-                <div class="list-item">
-                  <div class="list-item-head">
-                    <strong>${item.action}</strong>
-                    <small class="muted">${formatDateTimeBR(item.createdAt)}</small>
-                  </div>
-                  <div class="muted">${item.userName} • ${item.module}</div>
-                  <p>${item.details}</p>
-                </div>
-              `).join('')}
-            </div>
-          ` : `<div class="empty">Nenhuma movimentação recente.</div>`}
-        </div>
+        <div class="card"><div class="section-header"><div><h3>Resumo por Rota — ${escapeHtml(periodLabel)}</h3><p>Comparação entre enviado, recolhido e retornado no período.</p></div></div><div class="table-wrap"><table><thead><tr><th>Rota</th><th>Motorista</th><th>Enviadas</th><th>Recolhidas</th><th>Recebidas no CD</th><th>Status</th></tr></thead><tbody>${routeSummary.map((item) => `<tr><td>${item.route.name}</td><td>${getUserById(item.route.driverId)?.name || '-'}</td><td>${item.sent}</td><td>${item.pickup}</td><td>${item.returned}</td><td>${item.diff > 0 ? statusTag('warn') : statusTag('ok')}</td></tr>`).join('')}</tbody></table></div></div>
+        <div class="card"><div class="section-header"><div><h3>Ações no Período</h3></div></div>${auditItems.length ? `<div class="list">${auditItems.map((item) => `<div class="list-item"><div class="list-item-head"><strong>${item.action}</strong><small class="muted">${formatDateTimeBR(item.createdAt)}</small></div><div class="muted">${item.userName} • ${item.module}</div><p>${item.details}</p></div>`).join('')}</div>` : `<div class="empty">Nenhuma movimentação registrada nesse período.</div>`}</div>
       </div>
     </div>
   `;
@@ -11468,21 +11767,20 @@ function renderMetricCard(title, value, icon, tone, note) {
 }
 
 function renderResumoEnvios() {
-  const date = viewFilters.resumoEnviosDate || todayStr();
+  const period = getAnalysisPeriod();
   const networkFilter = viewFilters.resumoEnviosNetwork || '';
   const cdUserFilter = currentUser.role === 'admin' ? (viewFilters.resumoEnviosCdUserId || '') : '';
-  const rows = getVisibleOutboundSummaryRows(date, appState, currentUser)
+  const rows = getDateRangeYmd(period.startDate, period.endDate)
+    .flatMap((date) => getVisibleOutboundSummaryRows(date, appState, currentUser))
     .filter((item) => {
       const store = getStoreById(item.storeId);
       const networkOk = !networkFilter || inferStoreNetwork(store || {}) === networkFilter;
       const userOk = currentUser.role !== 'admin' || !cdUserFilter || item.createdById === cdUserFilter;
       return networkOk && userOk;
     })
-    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   const totalQty = rows.reduce((acc, item) => addQty(acc, item.qty), emptyQty());
-  const users = [...appState.users]
-    .filter((user) => user.role === 'cd')
-    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const users = [...appState.users].filter((user) => user.role === 'cd').sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   const groupedByCd = rows.reduce((acc, item) => {
     const key = item.createdById || item.createdBy || 'sem_usuario';
     if (!acc[key]) acc[key] = { name: getUserById(item.createdById)?.name || item.createdBy || 'Sem usuário', qty: emptyQty(), count: 0 };
@@ -11490,109 +11788,38 @@ function renderResumoEnvios() {
     acc[key].count += 1;
     return acc;
   }, {});
+  const periodText = `${formatDateBR(period.startDate)} a ${formatDateBR(period.endDate)}`;
 
   return `
     <div class="stack">
+      <div class="card period-summary-note"><span>📅</span><span>Resumo seguindo o período global: <strong>${periodText}</strong></span></div>
       <div class="cards-grid">
-        ${renderMetricCard('Lojas enviadas hoje', rows.length, '🏬', 'success', currentUser.role === 'cd' ? 'Lançadas por você' : 'Todos os usuários do CD')}
+        ${renderMetricCard('Lançamentos no período', rows.length, '🏬', 'success', currentUser.role === 'cd' ? 'Lançamentos visíveis para seu usuário' : 'Todos os usuários do CD no filtro')}
         ${renderMetricCard('Total enviado', `${sumQty(totalQty)} cx`, '📦', 'success', BOX_TYPES.map((item) => `${item.label}: ${safeInt(totalQty[item.key])}`).join(' • '))}
         ${renderMetricCard('Folhagens', safeInt(totalQty.folhagens), '🥬', 'success', 'Caixas lançadas no período')}
         ${renderMetricCard('Bandejas', safeInt(totalQty.bandejas), '🧺', 'success', 'Caixas lançadas no período')}
       </div>
 
       <div class="card">
-        <div class="page-header">
-          <div>
-            <h3>Filtro do resumo</h3>
-          </div>
-        </div>
+        <div class="page-header"><div><h3>Filtros complementares</h3><p class="muted">A data é controlada pelo seletor no topo da tela.</p></div></div>
         <form id="form-resumo-envios" class="form-grid-3">
-          <label>Data
-            <input type="date" name="date" value="${date}" />
-          </label>
-          <label>Rede
-            <select name="network">
-              <option value="">Todas as redes</option>
-              ${buildNetworkOptions(networkFilter)}
-            </select>
-          </label>
-          ${currentUser.role === 'admin' ? `
-            <label>Usuário CD
-              <select name="cdUserId">
-                <option value="">Todos</option>
-                ${users.map((user) => `<option value="${user.id}" ${user.id === cdUserFilter ? 'selected' : ''}>${escapeHtml(user.name)}</option>`).join('')}
-              </select>
-            </label>
-          ` : `
-            <label>Usuário CD
-              <input type="text" value="${escapeHtml(currentUser.name)}" readonly />
-            </label>
-          `}
+          <label>Período<input type="text" value="${escapeHtml(periodText)}" readonly /></label>
+          <label>Rede<select name="network"><option value="">Todas as redes</option>${buildNetworkOptions(networkFilter)}</select></label>
+          ${currentUser.role === 'admin' ? `<label>Usuário CD<select name="cdUserId"><option value="">Todos</option>${users.map((user) => `<option value="${user.id}" ${user.id === cdUserFilter ? 'selected' : ''}>${escapeHtml(user.name)}</option>`).join('')}</select></label>` : `<label>Usuário CD<input type="text" value="${escapeHtml(currentUser.name)}" readonly /></label>`}
         </form>
       </div>
 
-      ${currentUser.role === 'admin' ? `
-        <div class="card">
-          <div class="section-header"><div><h3>Resumo por usuário do CD</h3></div></div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Usuário</th><th>Lojas</th><th>Folhagens</th><th>Bandejas</th><th>Total</th></tr></thead>
-              <tbody id="resumo-envios-users-body">
-                ${Object.values(groupedByCd).length ? Object.values(groupedByCd).map((item) => `
-                  <tr>
-                    <td>${escapeHtml(item.name)}</td>
-                    <td>${item.count}</td>
-                    <td>${safeInt(item.qty.folhagens)}</td>
-                    <td>${safeInt(item.qty.bandejas)}</td>
-                    <td><strong>${sumQty(item.qty)}</strong></td>
-                  </tr>
-                `).join('') : `<tr><td colspan="5" class="center muted">Nenhum envio encontrado.</td></tr>`}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ` : ''}
+      ${currentUser.role === 'admin' ? `<div class="card"><div class="section-header"><div><h3>Resumo por usuário do CD</h3></div></div><div class="table-wrap"><table><thead><tr><th>Usuário</th><th>Lançamentos</th><th>Folhagens</th><th>Bandejas</th><th>Total</th></tr></thead><tbody id="resumo-envios-users-body">${Object.values(groupedByCd).length ? Object.values(groupedByCd).map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${item.count}</td><td>${safeInt(item.qty.folhagens)}</td><td>${safeInt(item.qty.bandejas)}</td><td><strong>${sumQty(item.qty)}</strong></td></tr>`).join('') : `<tr><td colspan="5" class="center muted">Nenhum envio encontrado.</td></tr>`}</tbody></table></div></div>` : ''}
 
       <div class="card">
         <div class="section-header"><div><h3>Envios lançados</h3></div></div>
-        <div class="table-wrap">
-          <table id="resumo-envios-table">
-            <thead>
-              <tr>
-                <th>Hora</th>
-                <th>Usuário CD</th>
-                <th>Rede</th>
-                <th>Loja</th>
-                <th>Rota</th>
-                <th>Folhagens</th>
-                <th>Bandejas</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rows.length ? rows.map((item) => {
-                const store = getStoreById(item.storeId);
-                return `
-                  <tr data-date="${item.date}" data-network="${escapeHtml(inferStoreNetwork(store || {}))}" data-cd-user-id="${escapeHtml(item.createdById || '')}" data-created-by="${escapeHtml(item.createdBy || '')}">
-                    <td>${item.createdAt ? new Date(item.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
-                    <td>${escapeHtml(getUserById(item.createdById)?.name || item.createdBy || '-')}</td>
-                    <td>${escapeHtml(inferStoreNetwork(store || {}))}</td>
-                    <td>${escapeHtml(formatStoreNameForUser(store?.name || '-'))}</td>
-                    <td>${escapeHtml(getRouteById(item.routeId)?.name || '-')}</td>
-                    <td>${safeInt(item.qty?.folhagens)}</td>
-                    <td>${safeInt(item.qty?.bandejas)}</td>
-                    <td><strong>${sumQty(item.qty)}</strong></td>
-                  </tr>
-                `;
-              }).join('') : `<tr><td colspan="8" class="center muted">Nenhum envio encontrado.</td></tr>`}
-            </tbody>
-          </table>
-        </div>
+        <div class="table-wrap"><table id="resumo-envios-table"><thead><tr><th>Data</th><th>Hora</th><th>Usuário CD</th><th>Rede</th><th>Loja</th><th>Rota</th><th>Folhagens</th><th>Bandejas</th><th>Total</th></tr></thead><tbody>
+          ${rows.length ? rows.map((item) => { const store = getStoreById(item.storeId); return `<tr data-date="${item.date}" data-network="${escapeHtml(inferStoreNetwork(store || {}))}" data-cd-user-id="${escapeHtml(item.createdById || '')}" data-created-by="${escapeHtml(item.createdBy || '')}"><td>${formatDateBR(item.date)}</td><td>${item.createdAt ? new Date(item.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '-'}</td><td>${escapeHtml(getUserById(item.createdById)?.name || item.createdBy || '-')}</td><td>${escapeHtml(inferStoreNetwork(store || {}))}</td><td>${escapeHtml(formatStoreNameForUser(store?.name || '-'))}</td><td>${escapeHtml(getRouteById(item.routeId)?.name || '-')}</td><td>${safeInt(item.qty?.folhagens)}</td><td>${safeInt(item.qty?.bandejas)}</td><td><strong>${sumQty(item.qty)}</strong></td></tr>`; }).join('') : `<tr><td colspan="9" class="center muted">Nenhum envio encontrado.</td></tr>`}
+        </tbody></table></div>
       </div>
     </div>
   `;
 }
-
 
 function renderFolhagensPorSeparadorCard() {
   const date = viewFilters.folhagensSeparatorDate || todayStr();
@@ -11724,10 +11951,12 @@ function renderSeparadores() {
     `;
   } catch (error) {
     console.error('Erro específico em Separadores:', error);
+    const diagnostic = reportSystemError('ERR-SEP-001', error, { action: 'renderSeparadores' }, { notify: false });
     return `
       <div class="card stack">
         <h3>Separadores</h3>
-        <p class="muted">Não foi possível montar a lista de separadores. Atualize a página com Ctrl + F5. Se continuar, envie o erro do console.</p>
+        <p class="muted">Não foi possível montar a lista de separadores. O erro foi registrado automaticamente.</p>
+        <div><span class="diagnostic-code">${escapeHtml(diagnostic.occurrenceCode)}</span></div>
         <div class="helper-card compact small">Detalhe técnico: ${escapeHtml(error?.message || String(error))}</div>
       </div>
     `;
@@ -13096,11 +13325,13 @@ function renderDivergencias() {
   const typeOptions = [...new Set(visibleDivergences.map((item) => item.type).filter(Boolean))]
     .sort((a, b) => getDivergenceTitle({ type: a }).localeCompare(getDivergenceTitle({ type: b }), 'pt-BR'));
 
+  const analysisPeriod = getAnalysisPeriod();
   const matchesFilters = (item) => {
     const owner = getDivergenceOwnerInfo(item);
     if (ownerFilter && owner.ownerKey !== ownerFilter) return false;
     if (typeFilter && item.type !== typeFilter) return false;
     if (dateFilter && item.date !== dateFilter) return false;
+    if (!dateFilter && !isDateInAnalysisPeriod(item.date || ymdFromIsoInSaoPaulo(item.createdAt), analysisPeriod)) return false;
     if (searchFilter) {
       const store = getStoreById(item.storeId);
       const route = getRouteById(item.routeId);
@@ -13114,7 +13345,7 @@ function renderDivergencias() {
   const filtered = visibleDivergences.filter(matchesFilters);
   const open = filtered.filter((item) => item.status === 'aberta');
   const resolved = filtered.filter((item) => item.status === 'resolvida');
-  const openTotal = visibleDivergences.filter((item) => item.status === 'aberta').length;
+  const openTotal = visibleDivergences.filter((item) => item.status === 'aberta' && (dateFilter ? item.date === dateFilter : isDateInAnalysisPeriod(item.date || ymdFromIsoInSaoPaulo(item.createdAt), analysisPeriod))).length;
   const OPEN_RENDER_LIMIT = 80;
   const RESOLVED_RENDER_LIMIT = 20;
   const openPage = open.slice(0, OPEN_RENDER_LIMIT);
@@ -13126,7 +13357,7 @@ function renderDivergencias() {
         <div class="page-header">
           <div>
             <h3>Central de regularização</h3>
-            <p class="muted">Filtre, selecione e regularize divergências em lote sem apagar o histórico.</p>
+            <p class="muted">Filtre, selecione e regularize divergências. Sem uma data específica, esta tela segue o período selecionado no topo: ${formatDateBR(analysisPeriod.startDate)} a ${formatDateBR(analysisPeriod.endDate)}.</p>
           </div>
           <div class="helper-card small">Abertas no sistema: <strong>${openTotal}</strong><br>No filtro: <strong>${open.length}</strong><br>Renderizadas agora: <strong>${openPage.length}</strong></div>
         </div>
@@ -13406,9 +13637,22 @@ function getPendencyPriorityMeta(item) {
   return { label: 'Atenção', className: 'warning' };
 }
 
+function getVisiblePendenciesForAnalysisPeriod(period = getAnalysisPeriod()) {
+  const dates = getDateRangeYmd(period.startDate, period.endDate);
+  const map = new Map();
+  dates.forEach((date) => {
+    getVisiblePendenciesForCurrentUser(date).forEach((item) => {
+      const key = `${item.id || ''}|${item.date || date}|${item.area || ''}|${item.storeId || ''}|${item.routeId || ''}`;
+      if (!map.has(key)) map.set(key, item);
+    });
+  });
+  return [...map.values()].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
 function renderPendencias() {
-  const selectedDate = viewFilters.pendenciaDate || todayStr();
-  const allPendencies = getVisiblePendenciesForCurrentUser(selectedDate);
+  const analysisPeriod = getAnalysisPeriod();
+  const selectedDate = viewFilters.pendenciaDate || '';
+  const allPendencies = selectedDate ? getVisiblePendenciesForCurrentUser(selectedDate) : getVisiblePendenciesForAnalysisPeriod(analysisPeriod);
   const groupsOrder = ['cd', 'logistics', 'storesDf', 'storesGoiania'];
   const groups = Object.fromEntries(groupsOrder.map((key) => [key, []]));
 
@@ -13492,7 +13736,7 @@ function renderPendencias() {
             <p class="muted">Veja rapidamente onde a operação está parada e quem precisa agir.</p>
           </div>
           <div class="pendency-total-box">
-            <span>Total na data</span>
+            <span>${selectedDate ? 'Total na data' : 'Total no período'}</span>
             <strong>${allPendencies.length}</strong>
           </div>
         </div>
@@ -13514,8 +13758,9 @@ function renderPendencias() {
         </div>
 
         <form id="form-pendency-filter" class="pendency-filter-bar">
-          <label>Data operacional
+          <label>Data específica (opcional)
             <input type="date" name="date" value="${escapeHtml(selectedDate)}" />
+            <small class="muted">Vazio = ${formatDateBR(analysisPeriod.startDate)} a ${formatDateBR(analysisPeriod.endDate)}</small>
           </label>
           <label>Responsável
             <select name="responsible">
@@ -13593,7 +13838,7 @@ function bindPendenciasEvents() {
   const filterForm = document.getElementById('form-pendency-filter');
   const applyFilters = () => {
     if (!filterForm) return;
-    viewFilters.pendenciaDate = filterForm.elements.date?.value || todayStr();
+    viewFilters.pendenciaDate = filterForm.elements.date?.value || '';
     viewFilters.pendenciaResponsible = filterForm.elements.responsible?.value || '';
     viewFilters.pendenciaType = filterForm.elements.type?.value || '';
     viewFilters.pendenciaSearch = filterForm.elements.search?.value || '';
@@ -13606,7 +13851,7 @@ function bindPendenciasEvents() {
   });
 
   filterForm?.elements.date?.addEventListener('change', () => {
-    viewFilters.pendenciaDate = filterForm.elements.date.value || todayStr();
+    viewFilters.pendenciaDate = filterForm.elements.date.value || '';
     viewFilters.pendenciaResponsible = '';
     viewFilters.pendenciaType = '';
     render();
@@ -13628,7 +13873,7 @@ function bindPendenciasEvents() {
   });
 
   document.getElementById('btn-clear-pendency-filter')?.addEventListener('click', () => {
-    viewFilters.pendenciaDate = todayStr();
+    viewFilters.pendenciaDate = '';
     viewFilters.pendenciaGroup = '';
     viewFilters.pendenciaResponsible = '';
     viewFilters.pendenciaType = '';
@@ -14756,29 +15001,27 @@ function getOperationalSpreadsheetValidationRows(date = todayStr(), state = appS
   }).sort((a, b) => (a.status === 'conflict' ? -1 : a.status === 'pending' ? 0 : 1) - (b.status === 'conflict' ? -1 : b.status === 'pending' ? 0 : 1) || (a.store?.name || '').localeCompare(b.store?.name || '', 'pt-BR'));
 }
 
-function renderOperationalSpreadsheetDashboardSummary(date = todayStr()) {
+function renderOperationalSpreadsheetDashboardSummary(startDate = todayStr(), endDate = startDate) {
   if (publicDashboardMode) return '';
-  const records = getOperationalSpreadsheetRecordsForDate(date);
+  const records = (appState.operationalSpreadsheetRecords || []).filter((item) => item.date >= startDate && item.date <= endDate && isOperationalSpreadsheetRecordApplicable(item, appState));
   if (!records.length && !canUseAnyOperationalSpreadsheet(currentUser)) return '';
-  const rows = getOperationalSpreadsheetValidationRows(date);
-  const conflicts = rows.reduce((acc, row) => acc + row.conflicts.length, 0);
+  const dates = getDateRangeYmd(startDate, endDate);
+  const rows = dates.flatMap((date) => getOperationalSpreadsheetValidationRows(date));
+  const conflicts = (appState.spreadsheetConflicts || []).filter((item) => item.date >= startDate && item.date <= endDate && item.status === 'aberta').length;
   const pending = rows.filter((row) => row.status === 'pending').length;
   const ok = rows.filter((row) => row.status === 'ok').length;
   return `
     <div class="card">
       <div class="page-header">
-        <div>
-          <h3>Validação por Planilhas</h3>
-          <p class="muted">Fonte operacional oficial: Excel. Em conflito com lançamentos anteriores do sistema, prevalece o registro importado da planilha.</p>
-        </div>
+        <div><h3>Validação por Planilhas</h3><p class="muted">Fonte operacional oficial: Excel. Período: ${formatDateBR(startDate)} a ${formatDateBR(endDate)}. Em conflito com lançamentos anteriores do sistema, prevalece o registro importado da planilha.</p></div>
         ${canAccessView('planilhasOperacionais', currentUser) ? '<button type="button" class="btn btn-secondary" id="btn-open-planilhas-operacionais">Abrir Planilhas Operacionais</button>' : ''}
       </div>
       <div class="stats-inline">
-        <div class="stat-pill"><span>Registros Excel hoje</span><strong>${records.length}</strong></div>
+        <div class="stat-pill"><span>Registros Excel</span><strong>${records.length}</strong></div>
         <div class="stat-pill"><span>Conferidos</span><strong>${ok}</strong></div>
         <div class="stat-pill"><span>Conflitos</span><strong>${conflicts}</strong></div>
       </div>
-      ${pending ? `<div class="helper-card compact small" style="margin-top:12px">${pending} loja(s) ainda aguardam uma das planilhas responsáveis.</div>` : ''}
+      ${pending ? `<div class="helper-card compact small" style="margin-top:12px">${pending} ocorrência(s) de loja/dia ainda aguardam uma das planilhas responsáveis.</div>` : ''}
     </div>
   `;
 }
@@ -14896,7 +15139,7 @@ async function parseOperationalSpreadsheetFile(file, importType) {
   if (!window.XLSX) throw new Error('Biblioteca de Excel não carregou. Atualize a página e tente novamente.');
   const meta = OPERATIONAL_SPREADSHEET_TYPES[importType];
   if (!meta) throw new Error('Tipo de planilha inválido.');
-  const buffer = await file.arrayBuffer();
+  const buffer = await readFileAsArrayBufferCompat(file);
   const workbook = window.XLSX.read(buffer, { type: 'array', cellDates: false });
   if (!workbook.SheetNames?.length) throw new Error('A planilha não possui abas para leitura.');
 
@@ -15133,7 +15376,7 @@ function downloadOperationalSpreadsheetTemplate(importType) {
       : importType === 'receipt_go'
         ? 'MODELO_CESAR_GOIANIA_POR_REDES.xlsx'
         : 'MODELO_ROBERTO_POR_ROTAS.xlsx';
-  window.XLSX.writeFile(wb, safeName);
+  writeWorkbookCompat(wb, safeName);
 }
 
 function downloadOperationalSpreadsheetFullTemplate() {
@@ -15143,7 +15386,7 @@ function downloadOperationalSpreadsheetFullTemplate() {
   appendOperationalGroupedSheets(wb, 'receipt_df', { fullTemplate: true });
   appendOperationalGroupedSheets(wb, 'receipt_go', { fullTemplate: true });
   appendOperationalGroupedSheets(wb, 'driver_ops', { fullTemplate: true });
-  window.XLSX.writeFile(wb, 'MODELO_PLANILHAS_OPERACIONAIS_SO_FOLHAS_AGRUPADO.xlsx');
+  writeWorkbookCompat(wb, 'MODELO_PLANILHAS_OPERACIONAIS_SO_FOLHAS_AGRUPADO.xlsx');
 }
 
 function bindPlanilhasOperacionaisEvents() {
@@ -15640,7 +15883,7 @@ function exportMassBoxWorkbook() {
   const safePart = (value) => normalizeText(value || '').replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '').slice(0, 35);
   const scopePart = data.scope.storeId ? safePart(getStoreById(data.scope.storeId)?.name) : (data.scope.network ? safePart(data.scope.network) : 'todas_lojas');
   const fileName = `Resumo_Caixas_${data.scope.startDate}_a_${data.scope.endDate}_${scopePart}.xlsx`;
-  window.XLSX.writeFile(workbook, fileName, { compression: true });
+  writeWorkbookCompat(workbook, fileName, { compression: true });
 }
 
 
@@ -15760,12 +16003,7 @@ function renderUsuarios() {
                       ${user.role === 'cd' ? `<details class="permissions-details box-permissions-details"><summary>Tipos de caixa</summary><div class="box-permissions-block">${renderBoxTypePermissionChecks(user.id, user.allowedBoxTypes || BOX_TYPES.map((item) => item.key))}</div></details>` : ''}
                     </div>
                   </td>
-                  <td data-label="Ação" class="user-action-cell">
-                    <div class="user-row-actions">
-                      <button type="button" class="btn btn-ghost btn-change-user-password btn-small" data-user-id="${user.id}">Alterar senha</button>
-                      <button type="button" class="btn btn-secondary btn-save-user btn-small" data-user-id="${user.id}">Salvar</button>
-                    </div>
-                  </td>
+                  <td data-label="Ação" class="user-action-cell"><button type="button" class="btn btn-secondary btn-save-user btn-small" data-user-id="${user.id}">Salvar</button></td>
                 </tr>
               `;}).join('')}
               <tr id="users-empty-filter-row" class="hidden"><td colspan="6"><div class="empty compact-empty">Nenhum usuário encontrado com esse filtro.</div></td></tr>
@@ -15823,6 +16061,77 @@ function renderUsuarios() {
       </details>
     </div>
   `;
+}
+
+function getMergedDiagnostics() {
+  const map = new Map();
+  [...(appState?.diagnostics || []), ...getLocalDiagnostics()].forEach((item) => {
+    if (!item) return;
+    const key = item.id || item.occurrenceCode || `${item.code}|${item.occurredAt}|${item.message}`;
+    if (!map.has(key)) map.set(key, item);
+  });
+  return [...map.values()].sort((a, b) => String(b.occurredAt || '').localeCompare(String(a.occurredAt || ''))).slice(0, 500);
+}
+
+function renderDiagnosticos() {
+  if (currentUser?.role !== 'admin') return '<div class="empty">Acesso restrito ao ADM.</div>';
+  const diagnostics = getMergedDiagnostics();
+  const recent24h = diagnostics.filter((item) => Date.now() - new Date(item.occurredAt || 0).getTime() <= 86400000).length;
+  const separatorErrors = diagnostics.filter((item) => String(item.code || '').startsWith('ERR-SEP-')).length;
+  const firebaseErrors = diagnostics.filter((item) => String(item.code || '').startsWith('ERR-FB-')).length;
+  return `
+    <div class="stack">
+      <div class="card">
+        <div class="page-header">
+          <div>
+            <h3>Diagnóstico de erros</h3>
+            <p class="muted">Quando ocorrer uma falha, peça o código exibido ao usuário. Esta tela registra área, usuário, aparelho, navegador, versão do sistema e detalhe técnico — sem gravar senhas.</p>
+          </div>
+          <span class="tag info">Versão ${escapeHtml(APP_VERSION)}</span>
+        </div>
+        <div class="stats-inline">
+          <div class="stat-pill"><span>Registros</span><strong>${diagnostics.length}</strong></div>
+          <div class="stat-pill"><span>Últimas 24h</span><strong>${recent24h}</strong></div>
+          <div class="stat-pill"><span>Separadores</span><strong>${separatorErrors}</strong></div>
+          <div class="stat-pill"><span>Firebase</span><strong>${firebaseErrors}</strong></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-header"><div><h3>Histórico técnico</h3><p class="muted">Mostrando os registros mais recentes. Clique em “Detalhes” para ver a pilha técnica e o ambiente.</p></div></div>
+        <div class="table-wrap">
+          <table class="diagnostic-table">
+            <thead><tr><th>Data/Hora</th><th>Código</th><th>Usuário</th><th>Área</th><th>Dispositivo</th><th>Mensagem</th><th>Ações</th></tr></thead>
+            <tbody>
+              ${diagnostics.length ? diagnostics.slice(0, 250).map((item) => {
+                const env = item.environment || {};
+                const context = item.context || {};
+                const detail = `Código: ${item.occurrenceCode || item.code || '-'}\nVersão: ${item.appVersion || '-'}\nUsuário: ${item.userName || '-'} (${item.userRole || '-'})\nÁrea: ${item.view || context.view || '-'}\nAção: ${context.action || '-'}\nSistema: ${env.os || '-'}\nNavegador: ${env.browser || '-'}\nTela: ${env.viewport || '-'}\nOnline: ${env.online === false ? 'não' : env.online === true ? 'sim' : '-'}\nMensagem: ${item.message || '-'}\n\nStack:\n${item.stack || 'Não disponível'}`;
+                return `<tr>
+                  <td>${formatDateTimeBR(item.occurredAt)}</td>
+                  <td><span class="diagnostic-code">${escapeHtml(item.occurrenceCode || item.code || '-')}</span></td>
+                  <td>${escapeHtml(item.userName || '-')}<br><small class="muted">${escapeHtml(item.userRole || '-')}</small></td>
+                  <td>${escapeHtml(item.view || context.view || '-')}<br><small class="muted">${escapeHtml(context.action || '-')}</small></td>
+                  <td>${escapeHtml(env.os || '-')}<br><small class="muted">${escapeHtml(env.browser || '-')} • ${escapeHtml(env.viewport || '-')}</small></td>
+                  <td class="diagnostic-message">${escapeHtml(item.message || '-')}</td>
+                  <td><div class="inline-actions"><button type="button" class="btn btn-ghost btn-small btn-copy-diagnostic" data-code="${escapeHtml(item.occurrenceCode || item.code || '')}">Copiar código</button><button type="button" class="btn btn-secondary btn-small btn-toggle-diagnostic" data-id="${escapeHtml(item.id || '')}">Detalhes</button></div><pre class="diagnostic-detail hidden" id="diag-detail-${escapeHtml(item.id || '')}">${escapeHtml(detail)}</pre></td>
+                </tr>`;
+              }).join('') : `<tr><td colspan="7"><div class="empty">Nenhum erro registrado até agora.</div></td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function bindDiagnosticosEvents() {
+  document.querySelectorAll('.btn-copy-diagnostic').forEach((button) => button.addEventListener('click', () => copyTextToClipboard(button.dataset.code || '')));
+  document.querySelectorAll('.btn-toggle-diagnostic').forEach((button) => button.addEventListener('click', () => {
+    const detail = document.getElementById(`diag-detail-${button.dataset.id || ''}`);
+    detail?.classList.toggle('hidden');
+    button.textContent = detail?.classList.contains('hidden') ? 'Detalhes' : 'Ocultar';
+  }));
 }
 
 function renderConfiguracoes() {
@@ -15902,6 +16211,7 @@ function bindViewEvents() {
   if (currentView === 'inventario') bindInventarioEvents();
   if (currentView === 'divergencias') bindDivergenciasEvents();
   if (currentView === 'usuarios') bindUsuariosEvents();
+  if (currentView === 'diagnosticos') bindDiagnosticosEvents();
   bindMovementCorrectionEvents();
 }
 
@@ -15910,7 +16220,7 @@ async function parseDeliveryPlanSpreadsheetFile(file, selectedDate = todayStr())
   if (!window.XLSX) {
     throw new Error('Biblioteca de leitura de Excel não carregou. Atualize a página e tente novamente.');
   }
-  const buffer = await file.arrayBuffer();
+  const buffer = await readFileAsArrayBufferCompat(file);
   // Manter cellDates=false e raw=true preserva datas do Excel como números seriais.
   // Assim 46218 é importado como 2026-07-15 sem voltar para 14/07 por causa de fuso horário.
   const workbook = window.XLSX.read(buffer, { type: 'array', cellDates: false });
@@ -16098,7 +16408,6 @@ function bindResumoEnviosEvents() {
   if (!form) return;
 
   form.addEventListener('change', () => {
-    viewFilters.resumoEnviosDate = form.date?.value || todayStr();
     viewFilters.resumoEnviosNetwork = form.network?.value || '';
     viewFilters.resumoEnviosCdUserId = form.cdUserId?.value || '';
     scheduleRender();
@@ -16239,6 +16548,63 @@ function bindSeparadoresEvents() {
   }
 }
 
+function getFolhagensDraftMap() {
+  try {
+    const parsed = JSON.parse(safeStorageGet(localStorage, FOLHAGENS_DRAFT_KEY, '{}') || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) { return {}; }
+}
+
+function getFolhagensDraftContextKey(form) {
+  const date = form?.querySelector('[name="date"]')?.value || viewFilters.folhagensSeparatorDate || todayStr();
+  const separatorId = form?.querySelector('[name="separatorId"]')?.value || viewFilters.folhagensSeparatorId || '';
+  return `${currentUser?.id || 'anon'}|${date}|${separatorId}`;
+}
+
+function saveFolhagensDraft(form) {
+  if (!form) return;
+  const contextKey = getFolhagensDraftContextKey(form);
+  const entries = {};
+  form.querySelectorAll('input[name^="folhagens_"]:not(:disabled)').forEach((input) => {
+    const qty = safeInt(input.value);
+    if (qty > 0) entries[input.name.replace('folhagens_', '')] = qty;
+  });
+  const map = getFolhagensDraftMap();
+  if (Object.keys(entries).length) {
+    map[contextKey] = { entries, savedAt: nowIso(), view: 'saidas' };
+  } else {
+    delete map[contextKey];
+  }
+  safeStorageSet(localStorage, FOLHAGENS_DRAFT_KEY, JSON.stringify(map));
+}
+
+function restoreFolhagensDraft(form) {
+  if (!form) return false;
+  const contextKey = getFolhagensDraftContextKey(form);
+  const draft = getFolhagensDraftMap()[contextKey];
+  if (!draft?.entries) return false;
+  let restored = false;
+  Object.entries(draft.entries).forEach(([storeId, qty]) => {
+    const escapedStoreId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(storeId) : String(storeId).replace(/"/g, '\\"');
+    const input = form.querySelector(`[name="folhagens_${escapedStoreId}"]`);
+    if (!input || input.disabled) return;
+    input.value = safeInt(qty);
+    restored = restored || safeInt(qty) > 0;
+  });
+  if (restored) {
+    beginFormEditLock('folhagens-separador', { separatorId: form.querySelector('[name="separatorId"]')?.value || '', action: 'rascunho_restaurado' });
+  }
+  return restored;
+}
+
+function clearFolhagensDraft(form) {
+  if (!form) return;
+  const contextKey = getFolhagensDraftContextKey(form);
+  const map = getFolhagensDraftMap();
+  delete map[contextKey];
+  safeStorageSet(localStorage, FOLHAGENS_DRAFT_KEY, JSON.stringify(map));
+}
+
 function bindSaidasEvents() {
   const form = document.getElementById('form-saida');
   const networkSelect = document.getElementById('saida-network');
@@ -16326,36 +16692,64 @@ function bindSaidasEvents() {
       const inputs = Array.from(bulkForm.querySelectorAll('input[name^="folhagens_"]:not(:disabled)'));
       const filled = inputs.filter((input) => safeInt(input.value) > 0);
       const total = filled.reduce((sum, input) => sum + safeInt(input.value), 0);
-      summary.innerHTML = `Lojas preenchidas: <strong>${filled.length}</strong> • Total de folhagens: <strong>${total}</strong> caixa(s).`;
+      summary.innerHTML = `Lojas preenchidas: <strong>${filled.length}</strong> • Total de folhagens: <strong>${total}</strong> caixa(s).${activeFormEditLock?.key === 'folhagens-separador' ? ' • <span class="tag info">Rascunho protegido</span>' : ''}`;
     };
     const bulkSeparatorField = bulkForm.querySelector('[name="separatorId"]');
     const bulkDateField = bulkForm.querySelector('[name="date"]');
     bulkSeparatorField?.addEventListener('change', () => {
+      saveFolhagensDraft(bulkForm);
+      endFormEditLock({ renderPending: false });
       viewFilters.folhagensSeparatorId = bulkSeparatorField.value || '';
       viewFilters.folhagensSeparatorDate = bulkDateField?.value || todayStr();
       scheduleRender();
     });
     bulkDateField?.addEventListener('change', () => {
+      saveFolhagensDraft(bulkForm);
+      endFormEditLock({ renderPending: false });
       viewFilters.folhagensSeparatorDate = bulkDateField.value || todayStr();
       scheduleRender();
     });
-    bulkForm.querySelectorAll('input[name^="folhagens_"]').forEach((input) => input.addEventListener('input', refreshBulkSummary));
+    bulkForm.querySelectorAll('input[name^="folhagens_"]').forEach((input) => input.addEventListener('input', () => {
+      beginFormEditLock('folhagens-separador', {
+        separatorId: bulkSeparatorField?.value || '',
+        storeId: input.name.replace('folhagens_', ''),
+        action: 'preenchimento_quantidades',
+      });
+      saveFolhagensDraft(bulkForm);
+      refreshBulkSummary();
+    }));
+    restoreFolhagensDraft(bulkForm);
     refreshBulkSummary();
     bulkForm.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const entries = Array.from(bulkForm.querySelectorAll('input[name^="folhagens_"]:not(:disabled)'))
-        .map((input) => ({ storeId: input.name.replace('folhagens_', ''), folhagens: safeInt(input.value) }))
-        .filter((entry) => entry.folhagens > 0);
-      if (!entries.length) {
-        showToast('Informe pelo menos uma quantidade de folhagens.', 'error');
-        return;
+      beginFormEditLock('folhagens-separador', { separatorId: bulkSeparatorField?.value || '', action: 'salvar_lote' });
+      saveFolhagensDraft(bulkForm);
+      try {
+        const entries = Array.from(bulkForm.querySelectorAll('input[name^="folhagens_"]:not(:disabled)'))
+          .map((input) => ({ storeId: input.name.replace('folhagens_', ''), folhagens: safeInt(input.value) }))
+          .filter((entry) => entry.folhagens > 0);
+        if (!entries.length) {
+          showToast('Informe pelo menos uma quantidade de folhagens.', 'error');
+          return;
+        }
+        const result = await persistMutation('BULK_CREATE_FOLHAGENS_OUTBOUNDS', {
+          date: bulkForm.querySelector('[name="date"]')?.value || todayStr(),
+          separatorId: bulkForm.querySelector('[name="separatorId"]')?.value || '',
+          entries,
+        }, 'Lançamentos de folhagens salvos com sucesso.');
+        if (result.ok) {
+          clearFolhagensDraft(bulkForm);
+          endFormEditLock({ renderPending: false });
+          render();
+        }
+      } catch (error) {
+        const diagnostic = reportSystemError('ERR-SEP-004', error, {
+          action: 'salvar_folhagens_separador',
+          separatorId: bulkSeparatorField?.value || '',
+        }, { notify: false });
+        saveFolhagensDraft(bulkForm);
+        showToast(`Não foi possível salvar. Seu preenchimento foi preservado. Código: ${diagnostic.occurrenceCode}`, 'error');
       }
-      const result = await persistMutation('BULK_CREATE_FOLHAGENS_OUTBOUNDS', {
-        date: bulkForm.querySelector('[name="date"]')?.value || todayStr(),
-        separatorId: bulkForm.querySelector('[name="separatorId"]')?.value || '',
-        entries,
-      }, 'Lançamentos de folhagens salvos com sucesso.');
-      if (result.ok) render();
     });
   }
 
@@ -17162,129 +17556,6 @@ function bindRotasEvents() {
   });
 }
 
-
-function ensureAdminPasswordModal() {
-  let modal = document.getElementById('admin-user-password-modal');
-  if (modal) return modal;
-
-  modal = document.createElement('div');
-  modal.id = 'admin-user-password-modal';
-  modal.className = 'admin-password-modal hidden';
-  modal.setAttribute('aria-hidden', 'true');
-  modal.innerHTML = `
-    <div class="admin-password-modal-backdrop" data-password-modal-close="1"></div>
-    <section class="admin-password-modal-card" role="dialog" aria-modal="true" aria-labelledby="admin-user-password-title">
-      <div class="admin-password-modal-head">
-        <div>
-          <span class="admin-password-kicker">Usuários</span>
-          <h3 id="admin-user-password-title">Alterar senha</h3>
-          <p id="admin-user-password-subtitle" class="muted">Defina uma nova senha para este usuário.</p>
-        </div>
-        <button type="button" class="icon-btn admin-password-close" data-password-modal-close="1" aria-label="Fechar">×</button>
-      </div>
-      <form id="admin-user-password-form" class="admin-password-form">
-        <input type="hidden" id="admin-user-password-id" />
-        <label>Nova senha
-          <input type="password" id="admin-user-new-password" minlength="6" autocomplete="new-password" placeholder="Digite a nova senha" required />
-        </label>
-        <label>Confirmar nova senha
-          <input type="password" id="admin-user-confirm-password" minlength="6" autocomplete="new-password" placeholder="Confirme a nova senha" required />
-        </label>
-        <div class="admin-password-feedback" id="admin-user-password-feedback"></div>
-        <div class="admin-password-actions">
-          <button type="button" class="btn btn-ghost" data-password-modal-close="1">Cancelar</button>
-          <button type="submit" class="btn btn-primary">Salvar nova senha</button>
-        </div>
-      </form>
-    </section>`;
-
-  document.body.appendChild(modal);
-
-  const closeModal = () => {
-    modal.classList.add('hidden');
-    modal.setAttribute('aria-hidden', 'true');
-    const form = modal.querySelector('#admin-user-password-form');
-    form?.reset();
-    const feedback = modal.querySelector('#admin-user-password-feedback');
-    if (feedback) feedback.textContent = '';
-  };
-
-  modal.querySelectorAll('[data-password-modal-close="1"]').forEach((button) => {
-    button.addEventListener('click', closeModal);
-  });
-
-  modal.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeModal();
-  });
-
-  modal.querySelector('#admin-user-password-form')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const userId = modal.querySelector('#admin-user-password-id')?.value || '';
-    const newPassword = modal.querySelector('#admin-user-new-password')?.value.trim() || '';
-    const confirmPassword = modal.querySelector('#admin-user-confirm-password')?.value.trim() || '';
-    const feedback = modal.querySelector('#admin-user-password-feedback');
-
-    if (!userId) {
-      if (feedback) feedback.textContent = 'Usuário não encontrado.';
-      return;
-    }
-    if (newPassword.length < 6) {
-      if (feedback) feedback.textContent = 'A nova senha precisa ter pelo menos 6 caracteres.';
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      if (feedback) feedback.textContent = 'As senhas digitadas não conferem.';
-      return;
-    }
-
-    const submit = event.submitter;
-    if (submit) submit.disabled = true;
-    try {
-      const result = await persistMutation(
-        'CHANGE_PASSWORD',
-        { userId, password: newPassword },
-        'Senha alterada com sucesso.'
-      );
-      if (!result.ok) {
-        if (feedback && result.error) feedback.textContent = result.error;
-        return;
-      }
-      closeModal();
-      render();
-    } finally {
-      if (submit) submit.disabled = false;
-    }
-  });
-
-  return modal;
-}
-
-function openAdminPasswordModal(userId) {
-  if (currentUser?.role !== 'admin') return;
-  const user = getUserById(userId);
-  if (!user) {
-    showToast('Usuário não encontrado.', 'error');
-    return;
-  }
-
-  const modal = ensureAdminPasswordModal();
-  const userIdInput = modal.querySelector('#admin-user-password-id');
-  const subtitle = modal.querySelector('#admin-user-password-subtitle');
-  const newPasswordInput = modal.querySelector('#admin-user-new-password');
-  const confirmPasswordInput = modal.querySelector('#admin-user-confirm-password');
-  const feedback = modal.querySelector('#admin-user-password-feedback');
-
-  if (userIdInput) userIdInput.value = user.id;
-  if (subtitle) subtitle.textContent = `${user.name} • ${user.username}`;
-  if (newPasswordInput) newPasswordInput.value = '';
-  if (confirmPasswordInput) confirmPasswordInput.value = '';
-  if (feedback) feedback.textContent = '';
-
-  modal.classList.remove('hidden');
-  modal.setAttribute('aria-hidden', 'false');
-  window.setTimeout(() => newPasswordInput?.focus(), 0);
-}
-
 function bindUsuariosEvents() {
   if (currentUser.role !== 'admin') return;
 
@@ -17356,10 +17627,6 @@ function bindUsuariosEvents() {
   document.querySelectorAll('.user-role-select').forEach((select) => {
     select.addEventListener('change', () => refreshUserTargetRow(select.dataset.userId));
     refreshUserTargetRow(select.dataset.userId);
-  });
-
-  document.querySelectorAll('.btn-change-user-password').forEach((button) => {
-    button.addEventListener('click', () => openAdminPasswordModal(button.dataset.userId));
   });
 
   document.querySelectorAll('.btn-save-user').forEach((button) => {
